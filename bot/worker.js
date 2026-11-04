@@ -384,7 +384,16 @@ export class Store {
         case '/scorte': return this.send(chatId, this.stockView(c));
         case '/storico': return this.send(chatId, this.historyView(c));
         case '/esporta': return this.send(chatId, this.exportView(c, msg.chat.title));
-        case '/terapia': return this.send(chatId, this.therapyView(c, msg.chat.title));
+        case '/terapia': {
+          const t = this.therapyView(c, msg.chat.title);
+          // versione per WhatsApp: *grassetto* al posto dei tag HTML
+          const plain = t.replace(/<b>(.*?)<\/b>/g, '*$1*').replace(/<[^>]+>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+          const url = 'https://wa.me/?text=' + encodeURIComponent(plain);
+          const ok = c.meds.length && url.length <= 4000;
+          await this.send(chatId, t, ok ? { inline_keyboard: [[{ text: '📤 Invia su WhatsApp', url }]] } : undefined);
+          if (c.meds.length && !ok) await this.send(chatId, "L'elenco è troppo lungo per il pulsante WhatsApp: tieni premuto il messaggio, tocca Copia e incollalo in WhatsApp.");
+          return;
+        }
         case '/trasferisci': {
           if (priv) return this.send(chatId, 'Questo comando si usa dentro un gruppo: sposta lì i farmaci di una persona dalla tua chat privata.');
           if (uid !== acl.admin) return this.send(chatId, 'Solo chi ha creato il bot può trasferire i farmaci.');
