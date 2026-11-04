@@ -354,9 +354,7 @@ export class Store {
           await this.send(chatId, `🏁 <b>Terapia conclusa</b>\n${esc(m.name)}${m.dose ? ' ' + esc(m.dose) : ''}${this.pp(c, m.person)}: l'ultimo giorno era ${fmtDate(m.end)}. Non mando più promemoria; la trovi in /storico tra le terapie concluse.`,
             { inline_keyboard: [[{ text: '📆 Prolunga', callback_data: 'MT|' + m.id }]] });
         }
-        // le terapie concluse da più di un anno escono anche dallo storico
-        const old = addDays(n.date, -365).date;
-        if (c.meds.some(m => m.end && m.end < old)) c.meds = c.meds.filter(m => !(m.end && m.end < old));
+        // le terapie concluse restano per sempre nello storico (si possono eliminare a mano)
       }
       // pulizia
       const keepSent = addDays(n.date, -1).date, keepLog = addDays(n.date, -90).date;
@@ -767,7 +765,7 @@ export class Store {
     const done = c.meds.filter(m => this.ended(m, today)).sort((a, b) => a.end < b.end ? 1 : -1);
     if (!done.length) return { text: 'Nessuna terapia conclusa.', kb: { inline_keyboard: [[{ text: '⬅️ Elenco', callback_data: 'ML' }]] } };
     return {
-      text: '🗂 <b>Terapie concluse</b>\nRestano nello storico per un anno. Toccane una per prolungarla o eliminarla.',
+      text: '🗂 <b>Terapie concluse</b>\nRestano sempre nello storico. Toccane una per prolungarla o eliminarla.',
       kb: { inline_keyboard: [...done.map(m => [{ text: `${m.name}${m.dose ? ' ' + m.dose : ''} · ${m.archived ? 'archiviato il' : 'fino al'} ${fmtDate(m.archived || m.end)}`.slice(0, 60), callback_data: 'MM|' + m.id }]), [{ text: '⬅️ Elenco', callback_data: 'ML' }]] }
     };
   }
