@@ -771,10 +771,11 @@ export class Store {
     if (!rq) return { text: 'Ricomincia da /scorte.' };
     const p = c.persons.find(x => x.id === rq.pid);
     const today = romeParts().date;
-    const ms = c.meds.filter(m => m.person === rq.pid && !this.ended(m, today))
-      .sort((a, b) => a.name.localeCompare(b.name, 'it', { sensitivity: 'base' }));
-    const seen = new Set(); const uniq = ms.filter(m => { const k = (m.name + '|' + m.dose).toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
     const left = m => (m.stock == null || !m.times.length) ? null : Math.floor(m.stock / this.perDay(m));
+    // prima quelli che finiscono prima (come /scorte), in fondo quelli senza conteggio
+    const ms = c.meds.filter(m => m.person === rq.pid && !this.ended(m, today))
+      .sort((a, b) => (left(a) ?? Infinity) - (left(b) ?? Infinity) || a.name.localeCompare(b.name, 'it', { sensitivity: 'base' }));
+    const seen = new Set(); const uniq = ms.filter(m => { const k = (m.name + '|' + m.dose).toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
     const info = p.info || {};
     const chosen = uniq.filter(m => rq.sel.includes(m.id));
     let wa = `Buongiorno${info.to ? ' ' + info.to : ''}, vorrei richiedere ${chosen.length === 1 ? 'la ricetta' : 'le ricette'} per:\n*${info.full || p.name}*`;
