@@ -386,7 +386,7 @@ export class Store {
       P.pinned = !!pr.ok; await this.saveAcl(acl);
     }
   }
-  async refreshPanels(acl, srcId, c) { for (const mc of this.mirrorsOf(acl, srcId)) await this.updatePanel(acl, mc, c); }
+  async refreshPanels(acl, srcId, c) { for (const mc of this.mirrorsOf(acl, srcId)) { await this.updatePanel(acl, mc, c); await this.updateOrders(acl, mc, c); } }
   // fresh = cancella il vecchio messaggio e lo rimanda in fondo, così si vede subito
   async mirrorTherapy(acl, mc, c, title, fresh) {
     acl.panels = acl.panels || {}; const P = acl.panels[mc] = acl.panels[mc] || {};
@@ -460,7 +460,7 @@ export class Store {
       if (!Object.keys(c.sent[n.date]).length) delete c.sent[n.date];
       if (changed) await this.saveChat(chatId, c);
       // pannelli dei gruppi semplici: aggiornati se è successo qualcosa o se è cambiato il giorno
-      for (const mc of targets.slice(1)) { const P = (acl.panels || {})[mc] || {}; if (changed || P.day !== n.date || !P.oggi) await this.updatePanel(acl, mc, c); }
+      for (const mc of targets.slice(1)) { const P = (acl.panels || {})[mc] || {}; if (changed || P.day !== n.date || !P.oggi) { await this.updatePanel(acl, mc, c); await this.updateOrders(acl, mc, c); } }
     }
   }
 
@@ -776,6 +776,7 @@ export class Store {
         m.lowLevel = null; delete m.lowWarned;
         const alert = this.stockAlert(c, m);
         delete c.flows[uid]; await save();
+        await this.refreshPanels(await this.acl(), chatId, c);
         await this.send(chatId, m.stock == null ? `Scorte di <b>${esc(m.name)}</b> non più conteggiate.` : `📦 Scorte di <b>${esc(m.name)}</b>: ${m.stock} unità.`);
         if (alert) await this.send(chatId, alert.text, alert.kb);
         return;
@@ -952,6 +953,57 @@ export class Store {
     };
   }
   // Richiesta ricette al medico: selezione dei farmaci e messaggio pronto per WhatsApp
+  waRequest(p, meds, who) {
+    const info = p.info || {};
+    let wa = `Buongiorno${info.to ? ' ' + info.to : ''}, vorrei richiedere ${meds.length === 1 ? 'la ricetta' : 'le ricette'} per:\n*${info.full || p.name}*`;
+    if (info.birth) wa += `\nData di nascita: ${info.birth}`;
+    if (info.cf) wa += `\nC.F. ${info.cf}`;
+    return wa + '\n\n' + meds.map(m => `• ${m.name}${m.dose ? ' ' + m.dose : ''}`).join('\n') + `\n\nGrazie${who ? ',\n' + who : ''}`;
+  }
+  // Farmaci con scorte per 7 giorni o meno (uno per nome+dosaggio), dal più urgente
+  lowMeds(c) {
+    const today = romeParts().date;
+    const left = m => m.stock / this.perDay(m);
+    const ms = c.meds.filter(m => !m.paused && !this.ended(m, today) && m.stock != null && m.times.length && left(m) <= LOW_STOCK_DAYS)
+      .sort((a, b) => left(a) - left(b) || a.name.localeCompare(b.name, 'it', { sensitivity: 'base' }));
+    const seen = new Set();
+    return ms.filter(m => { const k = (m.name + '|' + m.dose).toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
+  }
+  // Messaggio "Da ordinare" nel gruppo semplice: compare (con notifica) quando un farmaco entra nella lista, sparisce quando è vuota
+  async updateOrders(acl, mc, c) {
+    acl.panels = acl.panels || {}; const P = acl.panels[mc] = acl.panels[mc] || {};
+    const low = this.lowMeds(c);
+    const keys = low.map(m => m.id).sort().join(',');
+    if (!low.length) {
+      if (P.orders) { await this.del(mc, P.orders); delete P.orders; delete P.orderKeys; await this.saveAcl(acl); }
+      return;
+    }
+    const days = m => Math.floor(m.stock / this.perDay(m));
+    let t = `📦 <b>Da ordinare</b> — scorte per ${LOW_STOCK_DAYS} giorni o meno\n`;
+    t += '\n' + low.map(m => `${days(m) <= LAST_STOCK_DAYS ? '🔴' : '🟠'} <b>${esc(m.name)}</b>${m.dose ? ' ' + esc(m.dose) : ''}${this.pp(c, m.person)}: ${m.stock} ${m.stock === 1 ? 'compressa' : 'compresse'}, ${days(m) < 1 ? 'meno di un giorno' : 'circa ' + days(m) + (days(m) === 1 ? ' giorno' : ' giorni')}`).join('\n');
+    const kb = [];
+    const pids = [...new Set(low.map(m => m.person))];
+    let missing = false;
+    for (const pid of pids) {
+      const p = c.persons.find(x => x.id === pid) || { name: '—' };
+      const info = p.info || {};
+      if (!info.full) missing = true;
+      const url = 'https://wa.me/?text=' + encodeURIComponent(this.waRequest(p, low.filter(m => m.person === pid)));
+      kb.push([{ text: `📤 Invia richiesta${info.to ? ' a ' + info.to : ''}${pids.length > 1 ? ' · ' + p.name : ''}`.slice(0, 60), url }]);
+    }
+    for (const m of low) if (m.pack) kb.push([{ text: `✅ Comprato ${m.name} (+${m.pack})`.slice(0, 60), callback_data: `SA|${m.id}|1` }]);
+    t += `\n\nTocca 📤 per mandare la richiesta delle ricette su WhatsApp. Quando un farmaco è stato comprato tocca ✅: la scorta si aggiorna e il farmaco esce dalla lista.`;
+    if (missing) t += `\n\n<i>Mancano i dati dell'assistita: impostali nel gruppo principale da /scorte → Richiedi ricette.</i>`;
+    const markup = { inline_keyboard: kb };
+    const isNew = P.orderKeys !== undefined && low.some(m => !P.orderKeys.split(',').includes(m.id));
+    if (P.orders && !isNew) {
+      const r = await this.edit(mc, P.orders, t, markup);
+      if (r.ok || /not modified/i.test(r.description || '')) { if (P.orderKeys !== keys) { P.orderKeys = keys; await this.saveAcl(acl); } return; }
+    }
+    if (P.orders) await this.del(mc, P.orders);   // farmaco nuovo in lista: lo rimandiamo, così suona la notifica
+    const r = await this.send(mc, t, markup);
+    if (r.ok) { P.orders = r.result.message_id; P.orderKeys = keys; await this.saveAcl(acl); }
+  }
   reqView(c, uid, who) {
     const fl = c.flows[uid]; const rq = fl && fl.req;
     if (!rq) return { text: 'Ricomincia da /scorte.' };
@@ -964,10 +1016,7 @@ export class Store {
     const seen = new Set(); const uniq = ms.filter(m => { const k = (m.name + '|' + m.dose).toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
     const info = p.info || {};
     const chosen = uniq.filter(m => rq.sel.includes(m.id));
-    let wa = `Buongiorno${info.to ? ' ' + info.to : ''}, vorrei richiedere ${chosen.length === 1 ? 'la ricetta' : 'le ricette'} per:\n*${info.full || p.name}*`;
-    if (info.birth) wa += `\nData di nascita: ${info.birth}`;
-    if (info.cf) wa += `\nC.F. ${info.cf}`;
-    wa += '\n\n' + chosen.map(m => `• ${m.name}${m.dose ? ' ' + m.dose : ''}`).join('\n') + `\n\nGrazie${who ? ',\n' + who : ''}`;
+    const wa = this.waRequest(p, chosen, who);
     const text = `📤 <b>Richiesta ricette</b> — ${esc(info.full || p.name)}${info.to ? '\nDestinatario: ' + esc(info.to) : ''}${info.birth ? '\nData di nascita: ' + esc(info.birth) : ''}${info.cf ? '\nC.F. ' + esc(info.cf) : ''}\n\nTocca i farmaci per sceglierli (✅ = da richiedere). Sono già selezionati quelli con ${YELLOW_DAYS} giorni o meno.`;
     const kb = uniq.map(m => { const d = left(m); return [{ text: `${rq.sel.includes(m.id) ? '✅' : '⬜'} ${m.name}${m.dose ? ' ' + m.dose : ''}${d != null ? ` · ${d} gg` : ''}`.slice(0, 60), callback_data: 'RT|' + m.id }]; });
     if (chosen.length) kb.push([{ text: `📤 Invia su WhatsApp (${chosen.length})`, url: 'https://wa.me/?text=' + encodeURIComponent(wa) }]);
@@ -1057,7 +1106,7 @@ export class Store {
     const c = await this.chat(dataId);
     const [k, ...r] = data.split('|');
     const today = romeParts().date;
-    if (isMirror && !['T', 'S', 'Z', 'U', 'O', 'OR', 'TP'].includes(k)) return ans();
+    if (isMirror && !['T', 'S', 'Z', 'U', 'O', 'OR', 'TP', 'SA'].includes(k)) return ans();
 
     if (['T', 'S', 'Z', 'U', 'O'].includes(k)) {
       const [date, medId, time] = r;
@@ -1285,6 +1334,11 @@ export class Store {
       m.stock = Math.max(0, (m.stock || 0) + (k === 'SA' ? q : -q));
       if (k === 'SA') { m.lowLevel = null; delete m.lowWarned; }
       await this.saveChat(dataId, c);
+      await this.refreshPanels(acl, dataId, c);
+      if (isMirror) {   // dal messaggio "Da ordinare": avvisiamo anche il gruppo principale
+        await this.send(dataId, `🛒 <b>${esc(m.name)}</b> comprato${who ? ' da ' + esc(who) : ''}: +${q} compresse (ora ${m.stock}).`, { inline_keyboard: [[{ text: `↩️ Annulla (−${q})`, callback_data: `SU|${m.id}|${q}` }]] });
+        return ans(`+${q} compresse`);
+      }
       const v = this.stockCard(c, m, k === 'SA' ? `✅ Aggiunte ${q} compresse${who ? ' · ' + esc(who) : ''}.` : `↩️ Tolte ${q} compresse.`);
       if (k === 'SA') v.kb.inline_keyboard.unshift([{ text: `↩️ Annulla (−${q})`, callback_data: `SU|${m.id}|${q}` }]);
       await this.edit(chatId, mid, v.text, v.kb);
