@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Promemoria farmaci</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#f5f2ec;--card:#fffdf9;--ink:#1c2420;--muted:#6a726d;--line:#e5dfd4;
+  --accent:#1f5c4a;--accent-ink:#fff;--accent-soft:#e2eee8;
+  --warn:#b0502a;--warn-soft:#f7e6dc;--ok:#2d7a52;--ok-soft:#e1f1e7;
+  --shadow:0 1px 2px rgba(28,36,32,.06),0 6px 20px rgba(28,36,32,.06);
+  --r:16px;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#121614;--card:#1b201d;--ink:#eef1ee;--muted:#9aa49e;--line:#2b322e;
+  --accent:#7cc4a5;--accent-ink:#0f1a15;--accent-soft:#1f3329;
+  --warn:#f0a07a;--warn-soft:#3a2419;--ok:#7cc79c;--ok-soft:#1c3226;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.25);
+}}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 "DM Sans",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer;border:0;background:none}
+.wrap{max-width:640px;margin:0 auto;padding:20px 16px 120px}
+header.top{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;margin-bottom:18px}
+h1{font-family:Fraunces,Georgia,serif;font-weight:600;font-size:28px;line-height:1.1;margin:0;letter-spacing:-.01em}
+.date{color:var(--muted);font-size:14px;margin-top:4px;text-transform:capitalize}
+.sync{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:6px;white-space:nowrap;padding:5px 10px;border:1px solid var(--line);border-radius:99px}
+.sync i{width:7px;height:7px;border-radius:50%;background:var(--muted);display:inline-block}
+.sync.ok i{background:var(--ok)} .sync.warn i{background:var(--warn)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);padding:16px}
+.summary{display:flex;gap:16px;align-items:center;margin-bottom:22px}
+.ring{flex:none}
+.summary h2{font-family:Fraunces,Georgia,serif;font-weight:500;font-size:20px;margin:0 0 2px}
+.summary p{margin:0;color:var(--muted)}
+.sec{font-size:12px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:22px 4px 8px}
+.list{display:flex;flex-direction:column;gap:8px}
+.dose{display:flex;align-items:center;gap:12px;padding:12px 14px}
+.dot{width:10px;height:38px;border-radius:6px;flex:none}
+.dose .info{flex:1;min-width:0}
+.dose .name{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dose .meta{color:var(--muted);font-size:13px}
+.time{font-variant-numeric:tabular-nums;font-weight:600;font-size:15px;min-width:44px}
+.chip{display:inline-block;font-size:12px;font-weight:600;padding:2px 8px;border-radius:99px;background:var(--line);color:var(--muted)}
+.chip.ok{background:var(--ok-soft);color:var(--ok)} .chip.warn{background:var(--warn-soft);color:var(--warn)} .chip.acc{background:var(--accent-soft);color:var(--accent)}
+.acts{display:flex;gap:6px;align-items:center;flex:none}
+.btn{white-space:nowrap;padding:9px 14px;border-radius:12px;font-weight:600;font-size:14px;border:1px solid var(--line);background:var(--card)}
+.btn.pri{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.btn.ghost{border-color:transparent;color:var(--muted);padding:9px 8px}
+.btn.danger{color:var(--warn);border-color:var(--warn)}
+.btn.danger.sure{background:var(--warn);color:#fff}
+.btn:active{transform:scale(.97)}
+.dose.done{opacity:.72}
+.dose.due{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft),var(--shadow)}
+.dose.late{border-color:var(--warn)}
+.empty{text-align:center;padding:40px 20px}
+.empty h2{font-family:Fraunces,Georgia,serif;font-weight:500;margin:12px 0 6px}
+.empty p{color:var(--muted);margin:0 0 18px}
+.alertbox{display:flex;gap:10px;align-items:flex-start;background:var(--warn-soft);color:var(--warn);border-radius:12px;padding:10px 12px;font-size:14px;margin-bottom:8px}
+.note{font-size:13px;color:var(--muted);margin-top:24px;line-height:1.5}
+nav.tabs{position:fixed;left:0;right:0;bottom:0;background:color-mix(in srgb,var(--card) 92%,transparent);backdrop-filter:blur(10px);border-top:1px solid var(--line);display:flex;justify-content:center;padding:6px 8px calc(6px + env(safe-area-inset-bottom));z-index:5}
+nav.tabs .in{display:flex;max-width:640px;width:100%;gap:4px}
+nav.tabs button{flex:1;padding:8px 4px;border-radius:12px;color:var(--muted);font-size:12px;font-weight:600;display:flex;flex-direction:column;align-items:center;gap:2px}
+nav.tabs button.on{color:var(--accent);background:var(--accent-soft)}
+.fab{position:fixed;right:max(16px,calc(50% - 304px));bottom:calc(76px + env(safe-area-inset-bottom));width:56px;height:56px;border-radius:18px;background:var(--accent);color:var(--accent-ink);box-shadow:0 8px 24px rgba(31,92,74,.35);display:grid;place-items:center;z-index:6}
+.people{display:flex;gap:6px;overflow-x:auto;margin:-6px -16px 18px;padding:2px 16px;scrollbar-width:none}
+.people::-webkit-scrollbar{display:none}
+.pchip{flex:none;display:flex;align-items:center;gap:6px;padding:7px 13px;border-radius:99px;border:1px solid var(--line);background:var(--card);font-weight:600;font-size:14px;color:var(--muted)}
+.pchip i{width:9px;height:9px;border-radius:50%;display:inline-block}
+.pchip.on{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.pchip.add{border-style:dashed}
+.ptag{display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:600;color:var(--muted);margin-right:4px}
+.ptag i{width:7px;height:7px;border-radius:50%;display:inline-block}
+.seg{display:flex;flex-wrap:wrap;gap:6px}
+.seg button{padding:8px 12px;border-radius:12px;border:1px solid var(--line);background:var(--bg);font-weight:600;display:flex;align-items:center;gap:6px}
+.seg button i{width:9px;height:9px;border-radius:50%;display:inline-block}
+.seg button.on{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.med{display:flex;gap:12px;align-items:flex-start;padding:14px}
+.med .info{flex:1;min-width:0}
+.med .name{font-weight:600;font-size:16px}
+.med .meta{color:var(--muted);font-size:13px;margin-top:2px}
+.times{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}
+.paused{opacity:.55}
+.row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-top:1px solid var(--line)}
+.row:first-child{border-top:0;padding-top:0}
+.row:last-child{padding-bottom:0}
+.row small{display:block;color:var(--muted);font-size:13px}
+.switch{width:44px;height:26px;border-radius:99px;background:var(--line);position:relative;flex:none;transition:.2s}
+.switch::after{content:"";position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:#fff;transition:.2s;box-shadow:0 1px 3px rgba(0,0,0,.2)}
+.switch.on{background:var(--accent)} .switch.on::after{left:21px}
+.day{padding:12px 14px}
+.day .hd{display:flex;align-items:center;gap:12px;width:100%;text-align:left}
+.day .lbl{flex:1;text-transform:capitalize;font-weight:600}
+.bar{height:6px;border-radius:99px;background:var(--line);overflow:hidden;margin-top:6px}
+.bar b{display:block;height:100%;background:var(--ok);border-radius:99px}
+.day .detail{margin-top:10px;display:flex;flex-direction:column;gap:6px}
+.mini{display:flex;align-items:center;gap:10px;font-size:14px}
+.mini .n{flex:1}
+.adh{display:flex;align-items:center;gap:10px;padding:8px 0}
+.adh .n{flex:1;font-weight:500}
+.adh .bar{width:90px;margin:0}
+/* sheet */
+.overlay{position:fixed;inset:0;background:rgba(10,14,12,.45);display:none;align-items:flex-end;justify-content:center;z-index:20}
+.overlay.open{display:flex}
+.sheet{background:var(--card);width:100%;max-width:560px;max-height:92vh;overflow:auto;border-radius:22px 22px 0 0;padding:20px 18px calc(20px + env(safe-area-inset-bottom));animation:up .22s ease}
+@media(min-width:620px){.overlay{align-items:center}.sheet{border-radius:22px}}
+@keyframes up{from{transform:translateY(30px);opacity:0}}
+.sheet h2{font-family:Fraunces,Georgia,serif;font-weight:500;font-size:22px;margin:0 0 14px}
+label.f{display:block;margin-bottom:14px}
+label.f>span{display:block;font-size:13px;font-weight:600;color:var(--muted);margin-bottom:5px}
+.inp{width:100%;padding:11px 12px;border-radius:12px;border:1px solid var(--line);background:var(--bg);outline:none}
+.inp:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.tlist{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.tpill{display:flex;align-items:center;border:1px solid var(--line);border-radius:12px;background:var(--bg);padding-left:6px}
+.tpill input{border:0;background:none;padding:8px 2px;width:96px;outline:none}
+.tpill button{padding:8px 10px;color:var(--muted)}
+.presets{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.presets button{font-size:12px;padding:5px 10px;border-radius:99px;border:1px dashed var(--line);color:var(--muted)}
+.days{display:flex;gap:6px}
+.days button{flex:1;aspect-ratio:1;max-width:44px;border-radius:12px;border:1px solid var(--line);font-weight:600;background:var(--bg)}
+.days button.on{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.colors{display:flex;gap:10px}
+.colors button{width:30px;height:30px;border-radius:50%;border:3px solid transparent;outline:1px solid var(--line)}
+.colors button.on{border-color:var(--card);outline:2px solid var(--ink)}
+.formacts{display:flex;gap:8px;justify-content:space-between;margin-top:18px;flex-wrap:wrap}
+.err{color:var(--warn);font-size:13px;min-height:18px;margin-top:-6px;margin-bottom:6px}
+.remind .item{display:flex;align-items:center;gap:12px;padding:12px 0;border-top:1px solid var(--line)}
+.remind .item:first-of-type{border-top:0}
+.bell{width:52px;height:52px;border-radius:16px;background:var(--accent-soft);color:var(--accent);display:grid;place-items:center;margin-bottom:10px;animation:ring 1.2s ease 2}
+@keyframes ring{0%,100%{transform:rotate(0)}20%{transform:rotate(-12deg)}40%{transform:rotate(10deg)}60%{transform:rotate(-6deg)}80%{transform:rotate(4deg)}}
+.toast{position:fixed;left:50%;bottom:calc(150px + env(safe-area-inset-bottom));transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:12px;font-size:14px;z-index:30;opacity:0;pointer-events:none;transition:.25s;display:flex;gap:12px;align-items:center}
+.toast.show{opacity:1;pointer-events:auto}
+.toast button{color:var(--accent-soft);font-weight:600}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div><h1 id="title">Oggi</h1><div class="date" id="today"></div></div>
+    <div class="sync" id="sync"><i></i><span>Caricamento…</span></div>
+  </header>
+  <div class="people" id="people"></div>
+  <main id="main"></main>
+</div>
+<button class="fab" data-act="new" aria-label="Aggiungi farmaco"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>
+<nav class="tabs"><div class="in">
+  <button data-tab="oggi"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Oggi</button>
+  <button data-tab="farmaci"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="8.5" width="18" height="7" rx="3.5" transform="rotate(-35 12 12)"/><path d="M9.2 8.2l5.6 7.6" /></svg>Farmaci</button>
+  <button data-tab="storico"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>Storico</button>
+</div></nav>
+<div class="overlay" id="sheetOv"><div class="sheet" id="sheet"></div></div>
+<div class="overlay" id="remOv"><div class="sheet remind" id="rem"></div></div>
+<div class="toast" id="toast"></div>
+
+<script>
+(function(){
+"use strict";
+const LS='promemoria-farmaci-v1';
+const COLORS=['#1f5c4a','#3a6ea5','#b0502a','#8a4fa3','#c49a1c','#c2456b'];
+const DAYS=[{d:1,s:'L',n:'Lun'},{d:2,s:'M',n:'Mar'},{d:3,s:'M',n:'Mer'},{d:4,s:'G',n:'Gio'},{d:5,s:'V',n:'Ven'},{d:6,s:'S',n:'Sab'},{d:0,s:'D',n:'Dom'}];
+const PRESETS=[['Mattina','08:00'],['Pranzo','13:00'],['Sera','20:00'],['Notte','22:30']];
+const $=s=>document.querySelector(s);
+const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const pad=n=>String(n).padStart(2,'0');
+const dateKey=d=>d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());
+const parseKey=k=>{const[a,b,c]=k.split('-').map(Number);return new Date(a,b-1,c)};
+const hm=d=>pad(d.getHours())+':'+pad(d.getMinutes());
+const clone=o=>JSON.parse(JSON.stringify(o));
+const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,7);
+
+let state={profiles:[],meds:[],log:{},settings:{sound:true},updatedAt:0};
+let view='oggi', form=null, pform=null, openDays=new Set();
+let cur='all';try{cur=localStorage.getItem(LS+'-cur')||'all'}catch(e){}
+function setCur(id){cur=id;try{localStorage.setItem(LS+'-cur',id)}catch(e){}}
+const prof=id=>state.profiles.find(p=>p.id===id);
+const multi=()=>state.profiles.length>1;
+function ptag(id){const p=prof(id);return p&&multi()?`<span class="ptag"><i style="background:${esc(p.color)}"></i>${esc(p.name)}</span>`:''}
+
+function normalize(){
+  if(!state||typeof state!=='object')state={};
+  if(!Array.isArray(state.meds))state.meds=[];
+  if(!state.log||typeof state.log!=='object')state.log={};
+  if(!state.settings)state.settings={sound:true};
+  if(!Array.isArray(state.profiles)||!state.profiles.length)state.profiles=[{id:'p1',name:'Io',color:COLORS[0]}];
+  if(cur!=='all'&&!state.profiles.some(p=>p.id===cur))cur='all';
+  state.meds.forEach(m=>{m.times=Array.isArray(m.times)?m.times:[];m.days=Array.isArray(m.days)?m.days:[];m.qty=Number(m.qty)||1;if(!m.color)m.color=COLORS[0];if(!state.profiles.some(p=>p.id===m.profile))m.profile=state.profiles[0].id});
+}
+function loadLocal(){try{const s=JSON.parse(localStorage.getItem(LS));if(s&&s.meds)state=s}catch(e){}normalize()}
+function saveLocal(){try{localStorage.setItem(LS,JSON.stringify(state))}catch(e){}}
+function prune(){const lim=dateKey(new Date(Date.now()-90*864e5));Object.keys(state.log).forEach(k=>{if(k<lim)delete state.log[k]})}
+function commit(){state.updatedAt=Date.now();prune();saveLocal();queueRemote();render()}
+
+/* ---------- dosi ---------- */
+function dosesFor(date,pid){
+  const k=dateKey(date),dow=date.getDay(),out=[];
+  for(const m of state.meds){
+    if(m.paused)continue;
+    if(pid&&pid!=='all'&&m.profile!==pid)continue;
+    if(m.start&&k<m.start)continue;
+    if(m.end&&k>m.end)continue;
+    if(m.days.length&&m.days.length<7&&!m.days.includes(dow))continue;
+    for(const t of m.times){
+      const[h,mi]=t.split(':').map(Number);
+      const due=new Date(date.getFullYear(),date.getMonth(),date.getDate(),h,mi);
+      const key=m.id+'@'+t;
+      out.push({med:m,time:t,due,key,dayKey:k,entry:(state.log[k]||{})[key]});
+    }
+  }
+  return out.sort((a,b)=>a.due-b.due||a.med.name.localeCompare(b.med.name));
+}
+function status(d,now){
+  if(d.entry)return d.entry.s;
+  if(d.dayKey<dateKey(now))return 'missed';
+  if(d.due>now)return 'upcoming';
+  return (now-d.due<60*6e4)?'due':'late';
+}
+function findDose(day,key){return dosesFor(parseKey(day)).find(x=>x.key===key)}
+function mark(day,key,s){
+  const d=findDose(day,key);if(!d)return;
+  const m=d.med;state.log[day]=state.log[day]||{};
+  const prev=state.log[day][key];
+  if(prev&&prev.s==='taken'&&m.stock!=null)m.stock+=m.qty;
+  state.log[day][key]={s,t:Date.now()};
+  if(s==='taken'&&m.stock!=null)m.stock=Math.max(0,m.stock-m.qty);
+  delete snoozed[day+key];
+  commit();
+  toast((multi()?esc((prof(m.profile)||{}).name)+': ':'')+(s==='taken'?esc(m.name)+' segnato come preso':esc(m.name)+' saltato'),()=>undo(day,key));
+}
+function undo(day,key){
+  const d=findDose(day,key);const e=(state.log[day]||{})[key];if(!d||!e)return;
+  if(e.s==='taken'&&d.med.stock!=null)d.med.stock+=d.med.qty;
+  delete state.log[day][key];if(!Object.keys(state.log[day]).length)delete state.log[day];
+  commit();
+}
+
+/* ---------- render ---------- */
+function ring(p){const r=26,c=2*Math.PI*r;return `<svg class="ring" width="64" height="64" viewBox="0 0 64 64"><circle cx="32" cy="32" r="${r}" fill="none" stroke="var(--line)" stroke-width="7"/><circle cx="32" cy="32" r="${r}" fill="none" stroke="var(--ok)" stroke-width="7" stroke-linecap="round" stroke-dasharray="${c}" stroke-dashoffset="${c*(1-p)}" transform="rotate(-90 32 32)"/><text x="32" y="37" text-anchor="middle" font-size="15" font-weight="600" fill="var(--ink)" font-family="DM Sans">${Math.round(p*100)}%</text></svg>`}
+function daysText(m){if(!m.days.length||m.days.length===7)return 'Tutti i giorni';return DAYS.filter(x=>m.days.includes(x.d)).map(x=>x.n).join(', ')}
+function doseLine(m){return [m.dose,m.qty!==1?m.qty+' unità':'',m.notes].filter(Boolean).map(esc).join(' · ')}
+function stockDays(m){if(m.stock==null)return null;const perDay=m.qty*m.times.length*((m.days.length&&m.days.length<7)?m.days.length/7:1);return perDay?m.stock/perDay:null}
+
+function doseRow(d,now){
+  const st=status(d,now),m=d.med;
+  const chip={taken:`<span class="chip ok">Preso ${d.entry?hm(new Date(d.entry.t)):''}</span>`,skipped:'<span class="chip">Saltato</span>',due:'<span class="chip acc">Ora</span>',late:'<span class="chip warn">In ritardo</span>',missed:'<span class="chip warn">Non preso</span>',upcoming:''}[st];
+  const acts=d.entry
+    ?`<button class="btn ghost" data-act="undo" data-day="${d.dayKey}" data-key="${esc(d.key)}">Annulla</button>`
+    :`<button class="btn ghost" data-act="skip" data-day="${d.dayKey}" data-key="${esc(d.key)}">Salta</button><button class="btn ${st==='upcoming'?'':'pri'}" data-act="take" data-day="${d.dayKey}" data-key="${esc(d.key)}">Preso</button>`;
+  const cls=d.entry?'done':(st==='due'?'due':(st==='late'?'late':''));
+  return `<div class="card dose ${cls}"><div class="time">${d.time}</div><div class="dot" style="background:${esc(m.color)}"></div><div class="info"><div class="name">${esc(m.name)}</div><div class="meta">${cur==='all'?ptag(m.profile):''}${doseLine(m)||'&nbsp;'} ${chip}</div></div><div class="acts">${acts}</div></div>`;
+}
+
+function renderToday(){
+  const now=new Date();
+  if(!state.meds.length)return `<div class="card empty"><svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="1.6" stroke-linecap="round"><rect x="3" y="8.5" width="18" height="7" rx="3.5" transform="rotate(-35 12 12)"/><path d="M9.2 8.2l5.6 7.6"/></svg><h2>Nessun farmaco ancora</h2><p>Aggiungi il primo farmaco con dose e orari: qui vedrai cosa prendere oggi e riceverai i promemoria.</p><button class="btn pri" data-act="new">Aggiungi farmaco</button></div>`;
+  const list=dosesFor(now,cur);
+  let h='';
+  const low=state.meds.filter(m=>(cur==='all'||m.profile===cur)&&!m.paused&&stockDays(m)!=null&&stockDays(m)<=5);
+  low.forEach(m=>{h+=`<div class="alertbox">⚠︎ <div>${cur==='all'&&multi()?esc((prof(m.profile)||{}).name)+' · ':''}<b>${esc(m.name)}</b>: restano ${m.stock} unità (${(n=>n<1?'meno di un giorno':n===1?'circa 1 giorno':'circa '+n+' giorni')(Math.floor(stockDays(m)))}). Ricordati di riordinarlo.</div></div>`});
+  if(!list.length)return h+`<div class="card empty"><h2>Nessuna dose oggi</h2><p>${cur!=='all'&&!state.meds.some(m=>m.profile===cur)?esc(prof(cur).name)+' non ha ancora farmaci.':'Non ci sono farmaci programmati per oggi.'}</p>${cur!=='all'?'<button class="btn pri" data-act="new">Aggiungi farmaco</button>':''}</div>`;
+  const taken=list.filter(d=>d.entry&&d.entry.s==='taken').length;
+  const done=list.filter(d=>d.entry).length;
+  const next=list.find(d=>!d.entry&&d.due>now);
+  const pend=list.filter(d=>!d.entry&&d.due<=now).length;
+  let sub=pend?`${pend} ${pend===1?'dose da prendere ora':'dosi da prendere ora'}`:next?`Prossima: ${esc(next.med.name)} alle ${next.time}`:'Tutto fatto per oggi 🎉';
+  h+=`<div class="card summary">${ring(list.length?done/list.length:0)}<div><h2>${taken} di ${list.length} ${list.length===1?'dose presa':'dosi prese'}</h2><p>${sub}</p></div></div>`;
+  const groups=[['Mattina',0,12],['Pomeriggio',12,18],['Sera',18,24]];
+  groups.forEach(([n,a,b])=>{
+    const g=list.filter(d=>d.due.getHours()>=a&&d.due.getHours()<b);
+    if(g.length)h+=`<div class="sec">${n}</div><div class="list">${g.map(d=>doseRow(d,now)).join('')}</div>`;
+  });
+  return h;
+}
+
+function renderMedCards(ms){
+  return `<div class="list">`+ms.map(m=>{
+      const sd=stockDays(m);
+      const stock=m.stock!=null?`<span class="chip ${sd!=null&&sd<=5?'warn':''}">Scorte: ${m.stock}</span>`:'';
+      const per=m.end?` · fino al ${parseKey(m.end).toLocaleDateString('it-IT',{day:'numeric',month:'short'})}`:'';
+      return `<div class="card med ${m.paused?'paused':''}"><div class="dot" style="background:${esc(m.color)};height:44px"></div><div class="info"><div class="name">${esc(m.name)}${m.paused?' <span class="chip">In pausa</span>':''}</div><div class="meta">${doseLine(m)||'—'}</div><div class="meta">${daysText(m)}${per}</div><div class="times">${m.times.map(t=>`<span class="chip acc">${t}</span>`).join('')} ${stock}</div></div><button class="btn" data-act="edit" data-id="${esc(m.id)}">Modifica</button></div>`;
+    }).join('')+`</div>`;
+}
+function renderMeds(){
+  let h='';
+  const vis=state.meds.filter(m=>cur==='all'||m.profile===cur);
+  if(!vis.length)h+=`<div class="card empty"><h2>Nessun farmaco</h2><p>${cur!=='all'?esc(prof(cur).name)+' non ha ancora farmaci. ':''}Tocca + per aggiungerne uno.</p><button class="btn pri" data-act="new">Aggiungi farmaco</button></div>`;
+  else{
+    const order=id=>state.profiles.findIndex(p=>p.id===id);
+    const ms=[...vis].sort((a,b)=>order(a.profile)-order(b.profile))
+    const groups=cur==='all'&&multi()?state.profiles.map(p=>[p,ms.filter(m=>m.profile===p.id)]).filter(g=>g[1].length):[[null,ms]];
+    h+=groups.map(([pp,gm])=>(pp?`<div class="sec" style="display:flex;align-items:center;gap:6px"><i style="width:9px;height:9px;border-radius:50%;background:${esc(pp.color)};display:inline-block"></i>${esc(pp.name)}</div>`:'')+renderMedCards(gm.sort((a,b)=>(!!a.paused-!!b.paused)||a.name.localeCompare(b.name)))).join('');
+  }
+  h+=`<div class="sec">Persone</div><div class="card">`+state.profiles.map(p=>{const n=state.meds.filter(m=>m.profile===p.id).length;return `<div class="row"><div style="display:flex;align-items:center;gap:10px"><i style="width:12px;height:12px;border-radius:50%;background:${esc(p.color)};display:inline-block"></i><div>${esc(p.name)}<small>${n} ${n===1?'farmaco':'farmaci'}</small></div></div><button class="btn" data-act="pedit" data-id="${esc(p.id)}">Modifica</button></div>`}).join('')+`<div class="row"><div><small>Aggiungi un familiare per gestire anche i suoi farmaci</small></div><button class="btn" data-act="padd">+ Persona</button></div></div>`;
+  const np=('Notification' in window)?Notification.permission:'unsupported';
+  const nTxt=np==='granted'?'Attive':np==='denied'?'Bloccate dal browser':np==='unsupported'?'Non disponibili qui':'Non attive';
+  h+=`<div class="sec">Promemoria</div><div class="card">
+    <div class="row"><div>Suono<small>Un breve avviso sonoro quando è ora di una dose</small></div><div style="display:flex;gap:8px;align-items:center"><button class="btn" data-act="testsound">Prova</button><button class="switch ${state.settings.sound?'on':''}" data-act="sound" aria-label="Suono"></button></div></div>
+    <div class="row"><div>Notifiche del browser<small>${nTxt}</small></div>${np==='default'?'<button class="btn" data-act="notif">Attiva</button>':np==='granted'?'<button class="btn" data-act="testn">Prova</button>':''}</div>
+  </div>
+  <p class="note">I promemoria compaiono mentre questa pagina è aperta (anche in una scheda in background). A telefono bloccato o con la pagina chiusa non possono arrivare: per le dosi importanti imposta anche una sveglia sul telefono.<br><br>Questa app aiuta a ricordare, non sostituisce le indicazioni del medico o del farmacista.</p>`;
+  return h;
+}
+
+function renderHistory(){
+  const now=new Date();let h='';
+  if(!state.meds.length)return `<div class="card empty"><h2>Nessuno storico</h2><p>Lo storico si riempie man mano che segni le dosi.</p></div>`;
+  // aderenza per farmaco (7 giorni)
+  const per={};
+  for(let i=0;i<7;i++){const d=new Date(now.getFullYear(),now.getMonth(),now.getDate()-i);
+    dosesFor(d,cur).forEach(x=>{if(i===0&&x.due>now&&!x.entry)return;const p=per[x.med.id]=per[x.med.id]||{m:x.med,t:0,n:0};p.n++;if(x.entry&&x.entry.s==='taken')p.t++})}
+  const ps=Object.values(per);
+  if(ps.length){h+=`<div class="sec">Ultimi 7 giorni</div><div class="card">`+ps.map(p=>`<div class="adh"><div class="dot" style="background:${esc(p.m.color)};height:22px;width:8px"></div><div class="n">${cur==='all'?ptag(p.m.profile):''}${esc(p.m.name)}</div><span style="font-variant-numeric:tabular-nums;color:var(--muted);font-size:13px">${p.t}/${p.n}</span><div class="bar"><b style="width:${p.n?p.t/p.n*100:0}%"></b></div></div>`).join('')+`</div>`}
+  h+=`<div class="sec">Giorno per giorno</div><div class="list">`;
+  for(let i=0;i<14;i++){
+    const d=new Date(now.getFullYear(),now.getMonth(),now.getDate()-i),k=dateKey(d);
+    const list=dosesFor(d,cur).filter(x=>i>0||x.due<=now||x.entry);
+    const lbl=i===0?'Oggi':i===1?'Ieri':d.toLocaleDateString('it-IT',{weekday:'long',day:'numeric',month:'short'});
+    if(!list.length){h+=`<div class="card day" style="opacity:.6"><div class="hd"><span class="lbl">${lbl}</span><span class="chip">Nessuna dose</span></div></div>`;continue}
+    const t=list.filter(x=>x.entry&&x.entry.s==='taken').length,miss=list.filter(x=>!x.entry).length;
+    const op=openDays.has(k);
+    h+=`<div class="card day"><button class="hd" data-act="day" data-day="${k}"><span class="lbl">${lbl}</span>${miss?`<span class="chip warn">${miss} non ${miss===1?'segnata':'segnate'}</span>`:''}<span style="font-variant-numeric:tabular-nums;font-weight:600">${t}/${list.length}</span><span style="color:var(--muted)">${op?'▴':'▾'}</span></button><div class="bar"><b style="width:${t/list.length*100}%"></b></div>`;
+    if(op){h+=`<div class="detail">`+list.map(x=>{
+      const st=x.entry?x.entry.s:'missed';
+      const c=st==='taken'?'<span class="chip ok">Preso</span>':st==='skipped'?'<span class="chip">Saltato</span>':'<span class="chip warn">Non segnato</span>';
+      const a=x.entry?`<button class="btn ghost" data-act="undo" data-day="${k}" data-key="${esc(x.key)}">Annulla</button>`:`<button class="btn ghost" data-act="take" data-day="${k}" data-key="${esc(x.key)}">Segna preso</button>`;
+      return `<div class="mini"><span class="time" style="font-size:13px">${x.time}</span><span class="n">${cur==='all'?ptag(x.med.profile):''}${esc(x.med.name)}</span>${c}${a}</div>`}).join('')+`</div>`}
+    h+=`</div>`;
+  }
+  return h+`</div>`;
+}
+
+function render(){
+  const now=new Date();
+  $('#today').textContent=now.toLocaleDateString('it-IT',{weekday:'long',day:'numeric',month:'long'});
+  $('#title').textContent={oggi:'Oggi',farmaci:'Farmaci',storico:'Storico'}[view];
+  $('#people').innerHTML=multi()?`<button class="pchip ${cur==='all'?'on':''}" data-act="pick" data-id="all">Tutti</button>`+state.profiles.map(p=>`<button class="pchip ${cur===p.id?'on':''}" data-act="pick" data-id="${esc(p.id)}"><i style="background:${esc(p.color)}"></i>${esc(p.name)}</button>`).join('')+`<button class="pchip add" data-act="padd">+ Persona</button>`:`<button class="pchip add" data-act="padd">+ Aggiungi un familiare</button>`;
+  $('#main').innerHTML=view==='oggi'?renderToday():view==='farmaci'?renderMeds():renderHistory();
+  document.querySelectorAll('[data-tab]').forEach(b=>b.classList.toggle('on',b.dataset.tab===view));
+  const pend=dosesFor(now).filter(d=>!d.entry&&d.due<=now).length;
+  document.title=(pend?'('+pend+') ':'')+'Promemoria farmaci';
+}
+
+/* ---------- form ---------- */
+function openForm(m){
+  form=m?clone(m):{profile:(cur!=='all'&&prof(cur))?cur:state.profiles[0].id,name:'',dose:'',qty:1,times:['08:00'],days:[],start:dateKey(new Date()),end:'',stock:null,notes:'',color:COLORS[state.meds.length%COLORS.length]};
+  form.err='';form.sure=false;
+  renderForm();$('#sheetOv').classList.add('open');
+  setTimeout(()=>{const i=$('#sheet [data-f=name]');if(i&&!m)i.focus()},50);
+}
+function closeSheet(){$('#sheetOv').classList.remove('open');form=null;pform=null;setTimeout(check,400)}
+function renderForm(){
+  const f=form,all=!f.days.length||f.days.length===7;
+  $('#sheet').innerHTML=`<h2>${f.id?'Modifica farmaco':'Nuovo farmaco'}</h2>
+  ${multi()?`<div class="f" style="margin-bottom:14px"><span style="display:block;font-size:13px;font-weight:600;color:var(--muted);margin-bottom:5px">Per chi</span><div class="seg">${state.profiles.map(p=>`<button class="${f.profile===p.id?'on':''}" data-act="fprof" data-id="${esc(p.id)}"><i style="background:${esc(p.color)}"></i>${esc(p.name)}</button>`).join('')}</div></div>`:''}
+  <label class="f"><span>Nome del farmaco</span><input class="inp" data-f="name" value="${esc(f.name)}" placeholder="Es. Cardioaspirina" autocomplete="off"></label>
+  <div class="grid2">
+    <label class="f"><span>Dosaggio</span><input class="inp" data-f="dose" value="${esc(f.dose)}" placeholder="Es. 100 mg"></label>
+    <label class="f"><span>Unità per dose</span><input class="inp" data-f="qty" type="number" min="0.25" step="0.25" value="${esc(f.qty)}"></label>
+  </div>
+  <div class="f" style="margin-bottom:14px"><span style="display:block;font-size:13px;font-weight:600;color:var(--muted);margin-bottom:5px">Orari</span>
+    <div class="tlist">${f.times.map((t,i)=>`<div class="tpill"><input type="time" data-ti="${i}" value="${esc(t)}"><button data-act="rmtime" data-i="${i}" aria-label="Rimuovi orario">✕</button></div>`).join('')}<button class="btn" data-act="addtime">+ Orario</button></div>
+    <div class="presets">${PRESETS.map(([n,t])=>`<button data-act="preset" data-t="${t}">${n} ${t}</button>`).join('')}</div>
+  </div>
+  <div class="f" style="margin-bottom:14px"><span style="display:block;font-size:13px;font-weight:600;color:var(--muted);margin-bottom:5px">Giorni ${all?'· tutti i giorni':''}</span>
+    <div class="days">${DAYS.map(x=>`<button class="${all||f.days.includes(x.d)?'on':''}" data-act="day-t" data-d="${x.d}" aria-label="${x.n}">${x.s}</button>`).join('')}</div>
+  </div>
+  <div class="grid2">
+    <label class="f"><span>Dal</span><input class="inp" type="date" data-f="start" value="${esc(f.start)}"></label>
+    <label class="f"><span>Fino al (facoltativo)</span><input class="inp" type="date" data-f="end" value="${esc(f.end)}"></label>
+  </div>
+  <label class="f"><span>Scorte rimaste (facoltativo)</span><input class="inp" type="number" min="0" step="1" data-f="stock" value="${f.stock==null?'':esc(f.stock)}" placeholder="Es. 28 compresse"></label>
+  <label class="f"><span>Note</span><input class="inp" data-f="notes" value="${esc(f.notes)}" placeholder="Es. dopo colazione, a stomaco pieno"></label>
+  <div class="f"><span style="display:block;font-size:13px;font-weight:600;color:var(--muted);margin-bottom:8px">Colore</span><div class="colors">${COLORS.map(c=>`<button class="${f.color===c?'on':''}" style="background:${c}" data-act="color" data-c="${c}" aria-label="Colore"></button>`).join('')}</div></div>
+  <div class="err">${esc(f.err)}</div>
+  <div class="formacts">
+    <div>${f.id?`<button class="btn danger ${f.sure?'sure':''}" data-act="del">${f.sure?'Conferma eliminazione':'Elimina'}</button> <button class="btn" data-act="pause">${f.paused?'Riprendi':'Metti in pausa'}</button>`:''}</div>
+    <div style="display:flex;gap:8px"><button class="btn ghost" data-act="close">Annulla</button><button class="btn pri" data-act="save">Salva</button></div>
+  </div>`;
+}
+function saveForm(){
+  const f=form;
+  f.name=(f.name||'').trim();
+  if(!f.name){f.err='Inserisci il nome del farmaco.';renderForm();return}
+  const times=[...new Set(f.times.filter(t=>/^\d\d:\d\d$/.test(t)))].sort();
+  if(!times.length){f.err='Aggiungi almeno un orario.';renderForm();return}
+  if(f.end&&f.start&&f.end<f.start){f.err='La data di fine è prima di quella di inizio.';renderForm();return}
+  const m={id:f.id||uid(),profile:prof(f.profile)?f.profile:state.profiles[0].id,name:f.name,dose:(f.dose||'').trim(),qty:Number(f.qty)>0?Number(f.qty):1,times,days:f.days.length===7?[]:f.days,start:f.start||dateKey(new Date()),end:f.end||'',stock:(f.stock===''||f.stock==null||isNaN(Number(f.stock)))?null:Math.max(0,Number(f.stock)),notes:(f.notes||'').trim(),color:f.color,paused:!!f.paused};
+  const i=state.meds.findIndex(x=>x.id===m.id);
+  if(i>=0)state.meds[i]=m;else state.meds.push(m);
+  closeSheet();commit();toast(i>=0?'Modifiche salvate':esc(m.name)+' aggiunto');
+}
+
+function openPForm(p){
+  pform=p?Object.assign(clone(p),{isNew:false}):{id:'p'+uid(),name:'',color:COLORS.find(c=>!state.profiles.some(x=>x.color===c))||COLORS[state.profiles.length%COLORS.length],isNew:true};
+  pform.err='';pform.sure=false;renderPForm();$('#sheetOv').classList.add('open');
+  setTimeout(()=>{const i=$('#sheet [data-pf=name]');if(i)i.focus()},50);
+}
+function renderPForm(){
+  const f=pform,n=state.meds.filter(m=>m.profile===f.id).length;
+  $('#sheet').innerHTML=`<h2>${f.isNew?'Nuova persona':'Modifica persona'}</h2>
+  <label class="f"><span>Nome</span><input class="inp" data-pf="name" value="${esc(f.name)}" placeholder="Es. Mamma, Nonno Piero" autocomplete="off" maxlength="30"></label>
+  <div class="f"><span style="display:block;font-size:13px;font-weight:600;color:var(--muted);margin-bottom:8px">Colore</span><div class="colors">${COLORS.map(c=>`<button class="${f.color===c?'on':''}" style="background:${c}" data-act="pcolor" data-c="${c}" aria-label="Colore"></button>`).join('')}</div></div>
+  <div class="err" style="margin-top:12px">${esc(f.err)}</div>
+  ${f.sure&&n?`<p style="color:var(--warn);font-size:14px;margin:0 0 8px">Verranno eliminati anche ${n} ${n===1?'farmaco':'farmaci'} e il relativo storico.</p>`:''}
+  <div class="formacts"><div>${!f.isNew&&state.profiles.length>1?`<button class="btn danger ${f.sure?'sure':''}" data-act="pdel">${f.sure?'Conferma eliminazione':'Elimina'}</button>`:''}</div>
+  <div style="display:flex;gap:8px"><button class="btn ghost" data-act="close">Annulla</button><button class="btn pri" data-act="psave">Salva</button></div></div>`;
+}
+function savePForm(){
+  const f=pform,name=(f.name||'').trim();
+  if(!name){f.err='Inserisci un nome.';renderPForm();return}
+  if(state.profiles.some(p=>p.id!==f.id&&p.name.toLowerCase()===name.toLowerCase())){f.err='Esiste già una persona con questo nome.';renderPForm();return}
+  const p={id:f.id,name,color:f.color};const i=state.profiles.findIndex(x=>x.id===p.id);
+  if(i>=0)state.profiles[i]=p;else{state.profiles.push(p);setCur(p.id)}
+  closeSheet();commit();toast(i>=0?'Modifiche salvate':esc(name)+' aggiunto: ora puoi inserire i suoi farmaci');
+}
+
+/* ---------- promemoria ---------- */
+const snoozed={},alerted=new Set();let actx=null;
+function chime(){
+  if(!state.settings.sound||!actx)return;
+  try{const t=actx.currentTime;[[880,0],[1175,.18],[880,.6],[1175,.78]].forEach(([f,o])=>{const g=actx.createGain(),os=actx.createOscillator();os.type='sine';os.frequency.value=f;g.gain.setValueAtTime(0,t+o);g.gain.linearRampToValueAtTime(.18,t+o+.02);g.gain.exponentialRampToValueAtTime(.001,t+o+.35);os.connect(g).connect(actx.destination);os.start(t+o);os.stop(t+o+.4)})}catch(e){}
+}
+function notify(list){
+  try{if(!('Notification' in window)||Notification.permission!=='granted')return;
+    new Notification('È ora dei farmaci',{body:list.map(d=>d.time+' · '+(multi()&&prof(d.med.profile)?prof(d.med.profile).name+': ':'')+d.med.name+(d.med.dose?' '+d.med.dose:'')).join('\n'),tag:'promemoria-farmaci'})}catch(e){}
+}
+function dueNow(){
+  const now=new Date();
+  return dosesFor(now).filter(d=>!d.entry&&d.due<=now&&now-d.due<6*36e5&&!((snoozed[d.dayKey+d.key]||0)>now.getTime()));
+}
+function check(){
+  if($('#sheetOv').classList.contains('open'))return;
+  const due=dueNow();
+  const fresh=due.filter(d=>!alerted.has(d.dayKey+d.key+'|'+(snoozed[d.dayKey+d.key]||0)));
+  if(fresh.length){fresh.forEach(d=>alerted.add(d.dayKey+d.key+'|'+(snoozed[d.dayKey+d.key]||0)));showReminder();chime();notify(fresh)}
+  else if($('#remOv').classList.contains('open'))showReminder();
+}
+function showReminder(){
+  const due=dueNow();
+  if(!due.length){$('#remOv').classList.remove('open');return}
+  $('#rem').innerHTML=`<div class="bell"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg></div><h2>È ora di prendere</h2>`+
+  due.map(d=>`<div class="item"><div class="dot" style="background:${esc(d.med.color)}"></div><div style="flex:1;min-width:0">${multi()?`<div style="font-size:13px;font-weight:700;color:${esc((prof(d.med.profile)||{}).color)}">${esc((prof(d.med.profile)||{}).name)}</div>`:''}<div style="font-weight:600">${esc(d.med.name)}</div><div style="color:var(--muted);font-size:13px">${d.time}${doseLine(d.med)?' · '+doseLine(d.med):''}</div></div><button class="btn ghost" data-act="skip" data-day="${d.dayKey}" data-key="${esc(d.key)}">Salta</button><button class="btn pri" data-act="take" data-day="${d.dayKey}" data-key="${esc(d.key)}">Preso</button></div>`).join('')+
+  `<div class="formacts"><button class="btn" data-act="snooze">Ricordamelo tra 10 min</button><button class="btn ghost" data-act="remclose">Chiudi</button></div>`;
+  $('#remOv').classList.add('open');
+}
+
+/* ---------- sincronizzazione ---------- */
+let remote=null,writing=false,dirty=false,deb=null;
+function setSync(s){const el=$('#sync');el.className='sync '+(s==='ok'||s==='device'?'ok':s==='local'?'warn':'');
+  el.querySelector('span').textContent={ok:'Salvato',loading:'Sincronizzo…',slow:'Connessione lenta…',local:'Solo su questo dispositivo',device:'Salvato in questo browser'}[s]||s}
+function queueRemote(){if(!remote)return;dirty=true;clearTimeout(deb);deb=setTimeout(flush,700)}
+async function flush(){
+  if(!remote||writing||!dirty)return;
+  writing=true;dirty=false;let retry=false;
+  try{await remote.set(clone(state));setSync('ok')}
+  catch(e){if(e&&(e.code==='unavailable'||e.code==='resource_exhausted')){dirty=true;retry=true}else{remote=null;setSync('local')}}
+  writing=false;
+  if(dirty&&remote)setTimeout(flush,retry?1500+Math.random()*2000:0);
+}
+function applyRemote(d){if(d&&(d.updatedAt||0)>(state.updatedAt||0)){state=clone(d);normalize();saveLocal();render()}}
+async function initRemote(){
+  try{
+    let w=0;while(!(window.claude&&window.claude.use)&&w<30){await new Promise(r=>setTimeout(r,100));w++}
+    if(!(window.claude&&window.claude.use)){setSync('device');return}
+    const[db,user]=await Promise.all([window.claude.use('db'),window.claude.use('user')]);
+    if(!db||!user){setSync('local');return}
+    const id=await user.id();if(!id){setSync('local');return}
+    const ref=db.doc('data/users/'+id+'/state');
+    setSync('loading');const timer=setTimeout(()=>setSync('slow'),10000);
+    const snap=await ref.get();clearTimeout(timer);
+    remote=ref;
+    if(snap.exists){const d=snap.data();if((d.updatedAt||0)>(state.updatedAt||0))applyRemote(d);else if((state.updatedAt||0)>(d.updatedAt||0)){dirty=true;flush()}}
+    else if(state.meds.length){dirty=true;flush()}
+    setSync('ok');
+    ref.onSnapshot(s=>{if(s.exists&&!s.metadata.hasPendingWrites)applyRemote(s.data())},()=>{});
+  }catch(e){remote=null;setSync('local')}
+}
+
+/* ---------- UI ---------- */
+let tt=null,undoFn=null;
+function toast(msg,fn){const t=$('#toast');undoFn=fn||null;t.innerHTML=`<span>${msg}</span>${fn?'<button data-act="toastundo">Annulla</button>':''}`;t.classList.add('show');clearTimeout(tt);tt=setTimeout(()=>t.classList.remove('show'),4000)}
+
+document.addEventListener('pointerdown',()=>{if(!actx){try{actx=new (window.AudioContext||window.webkitAudioContext)()}catch(e){}}else if(actx.state==='suspended')actx.resume().catch(()=>{})},{capture:true});
+
+document.addEventListener('click',e=>{
+  const tab=e.target.closest('[data-tab]');if(tab){view=tab.dataset.tab;render();window.scrollTo(0,0);return}
+  if(e.target.id==='sheetOv'){closeSheet();return}
+  if(e.target.id==='remOv'){$('#remOv').classList.remove('open');return}
+  const b=e.target.closest('[data-act]');if(!b)return;
+  const a=b.dataset.act;
+  switch(a){
+    case 'new':openForm();break;
+    case 'pick':setCur(b.dataset.id);render();window.scrollTo(0,0);break;
+    case 'padd':openPForm();break;
+    case 'pedit':openPForm(prof(b.dataset.id));break;
+    case 'pcolor':pform.color=b.dataset.c;renderPForm();break;
+    case 'psave':savePForm();break;
+    case 'pdel':if(!pform.sure){pform.sure=true;renderPForm()}else{const id=pform.id,n=pform.name;const ids=new Set(state.meds.filter(m=>m.profile===id).map(m=>m.id));state.meds=state.meds.filter(m=>m.profile!==id);Object.keys(state.log).forEach(k=>{Object.keys(state.log[k]).forEach(key=>{if(ids.has(key.split('@')[0]))delete state.log[k][key]});if(!Object.keys(state.log[k]).length)delete state.log[k]});state.profiles=state.profiles.filter(p=>p.id!==id);if(cur===id)setCur('all');closeSheet();commit();toast(esc(n)+' eliminato')}break;
+    case 'fprof':form.profile=b.dataset.id;renderForm();break;
+    case 'edit':openForm(state.meds.find(m=>m.id===b.dataset.id));break;
+    case 'close':closeSheet();break;
+    case 'save':saveForm();break;
+    case 'addtime':{const last=form.times[form.times.length-1];let h=last?(+last.split(':')[0]+4)%24:8;form.times.push(pad(h)+':00');renderForm();break}
+    case 'preset':if(!form.times.includes(b.dataset.t))form.times.push(b.dataset.t);form.times.sort();renderForm();break;
+    case 'rmtime':form.times.splice(+b.dataset.i,1);renderForm();break;
+    case 'day-t':{const d=+b.dataset.d;let ds=(!form.days.length||form.days.length===7)?DAYS.map(x=>x.d):[...form.days];ds=ds.includes(d)?ds.filter(x=>x!==d):[...ds,d];if(!ds.length){form.err='Seleziona almeno un giorno.';ds=[d]}else form.err='';form.days=ds.length===7?[]:ds;renderForm();break}
+    case 'color':form.color=b.dataset.c;renderForm();break;
+    case 'pause':form.paused=!form.paused;renderForm();break;
+    case 'del':if(!form.sure){form.sure=true;renderForm()}else{const n=form.name;state.meds=state.meds.filter(m=>m.id!==form.id);closeSheet();commit();toast(esc(n)+' eliminato')}break;
+    case 'take':mark(b.dataset.day,b.dataset.key,'taken');if($('#remOv').classList.contains('open'))showReminder();break;
+    case 'skip':mark(b.dataset.day,b.dataset.key,'skipped');if($('#remOv').classList.contains('open'))showReminder();break;
+    case 'undo':undo(b.dataset.day,b.dataset.key);break;
+    case 'toastundo':if(undoFn)undoFn();undoFn=null;$('#toast').classList.remove('show');break;
+    case 'snooze':{const until=Date.now()+10*6e4;dueNow().forEach(d=>snoozed[d.dayKey+d.key]=until);$('#remOv').classList.remove('open');toast('Te lo ricordo tra 10 minuti');break}
+    case 'remclose':$('#remOv').classList.remove('open');break;
+    case 'day':{const k=b.dataset.day;openDays.has(k)?openDays.delete(k):openDays.add(k);render();break}
+    case 'sound':state.settings.sound=!state.settings.sound;commit();if(state.settings.sound){setTimeout(chime,50)}break;
+    case 'notif':try{const p=Notification.requestPermission();Promise.resolve(p).then(()=>render()).catch(()=>{toast('Il browser non consente notifiche qui');render()})}catch(err){toast('Il browser non consente notifiche qui')}break;
+    case 'testsound':{const was=state.settings.sound;state.settings.sound=true;try{if(!actx)actx=new (window.AudioContext||window.webkitAudioContext)();if(actx.state==='suspended')actx.resume().catch(()=>{})}catch(err){}setTimeout(()=>{chime();state.settings.sound=was},80);toast(actx?'Suono di prova in riproduzione':'Questo browser non riproduce suoni');break}
+    case 'testn':notify([{time:hm(new Date()),med:{name:'Prova promemoria',dose:''}}]);break;
+  }
+});
+document.addEventListener('input',e=>{
+  const t=e.target;
+  if(pform&&t.dataset.pf){pform[t.dataset.pf]=t.value;return}
+  if(!form)return;
+  if(t.dataset.f)form[t.dataset.f]=t.value;
+  if(t.dataset.ti!=null)form.times[+t.dataset.ti]=t.value;
+});
+document.addEventListener('keydown',e=>{if(e.key==='Enter'&&pform&&e.target.dataset.pf){savePForm();return}if(e.key==='Escape'){if(form||pform)closeSheet();$('#remOv').classList.remove('open')}});
+document.addEventListener('visibilitychange',()=>{if(!document.hidden){render();check()}});
+
+loadLocal();render();setSync('loading');
+initRemote().then(()=>{render();check()});
+setInterval(()=>{check();if(!form&&!pform)render()},20000);
+setTimeout(check,1500);
+let lastDay=dateKey(new Date());setInterval(()=>{const k=dateKey(new Date());if(k!==lastDay){lastDay=k;render()}},60000);
+})();
+</script>
+</body>
+</html>
