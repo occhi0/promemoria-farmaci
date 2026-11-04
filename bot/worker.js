@@ -362,6 +362,7 @@ export class Store {
     if (r.ok) {
       P.oggi = r.result.message_id; P.day = romeParts().date;
       const pr = await tg(this.env, 'pinChatMessage', { chat_id: r._chat || mc, message_id: P.oggi, disable_notification: true });
+      if (pr.ok) await this.del(r._chat || mc, P.oggi + 1);   // l'avviso "ha fissato un messaggio" è il messaggio subito dopo
       P.pinned = !!pr.ok; await this.saveAcl(acl);
     }
   }
@@ -449,6 +450,13 @@ export class Store {
     const msg = up.message;
     if (msg && msg.migrate_to_chat_id) return this.migrateChat(msg.chat.id, msg.migrate_to_chat_id);
     if (msg && msg.migrate_from_chat_id) return this.migrateChat(msg.migrate_from_chat_id, msg.chat.id);
+    // Gruppo semplice: via i messaggi di servizio (nome cambiato, messaggio fissato, ingressi, foto…)
+    const SERVICE = ['new_chat_title', 'new_chat_photo', 'delete_chat_photo', 'pinned_message', 'new_chat_members', 'left_chat_member', 'message_auto_delete_timer_changed', 'video_chat_scheduled', 'video_chat_started', 'video_chat_ended', 'boost_added', 'chat_background_set'];
+    if (msg && SERVICE.some(k => msg[k] !== undefined)) {
+      const a0 = await this.acl();
+      if ((a0.mirrors || {})[String(msg.chat.id)]) await this.del(msg.chat.id, msg.message_id);
+      return;
+    }
     if (!msg || !msg.from || msg.from.is_bot) return;
     const chatId = String(msg.chat.id), uid = String(msg.from.id), name = msg.from.first_name || 'Utente';
     const priv = msg.chat.type === 'private';
