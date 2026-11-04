@@ -6,7 +6,9 @@ const TZ = 'Europe/Rome';
 const DOW_SHORT = ['dom', 'lun', 'mar', 'mer', 'gio', 'ven', 'sab'];
 const FOLLOW_UP_MIN = 30;   // secondo avviso se la dose non è segnata
 const SNOOZE_MIN = 10;
-const LOW_STOCK_DAYS = 5;
+const LOW_STOCK_DAYS = 7;   // primo avviso scorte
+const LAST_STOCK_DAYS = 2;  // ultimo avviso
+const STOCK_CHECK_HM = '09:00';
 
 const esc = s => String(s ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
 const rid = () => Math.random().toString(36).slice(2, 8);
@@ -194,13 +196,21 @@ export class Store {
     c.snooze = c.snooze.filter(x => !(x.key === key && x.date === date));
     if (s === 'taken' && m.stock != null) {
       m.stock = Math.max(0, m.stock - (m.qty || 1));
-      const left = m.stock / this.perDay(m);
-      if (left <= LOW_STOCK_DAYS && !m.lowWarned) {
-        m.lowWarned = true;
-        return `📦 <b>${esc(m.name)}</b> (${esc(this.person(c, m.person))}): restano ${m.stock} unità, ${left < 1 ? 'meno di un giorno' : 'circa ' + Math.floor(left) + (Math.floor(left) === 1 ? ' giorno' : ' giorni')}. Ricordati di riordinarlo.\nQuando lo ricompri: /farmaci → ${esc(m.name)} → Scorte.`;
-      }
+      return this.stockAlert(c, m);
     }
     return null;
+  }
+  // Avviso scorte: a 7 giorni e poi a 2 giorni, una volta per livello.
+  stockAlert(c, m) {
+    if (m.stock == null || m.paused || !m.times.length) return null;
+    const left = m.stock / this.perDay(m);
+    const level = left <= LAST_STOCK_DAYS ? LAST_STOCK_DAYS : left <= LOW_STOCK_DAYS ? LOW_STOCK_DAYS : null;
+    if (level == null || (m.lowLevel != null && m.lowLevel <= level)) return null;
+    m.lowLevel = level;
+    const days = Math.floor(left);
+    const until = addDays(romeParts().date, days).date;
+    const howLong = m.stock === 0 ? '<b>sono finite</b>' : `bastano per ${days < 1 ? 'meno di un giorno' : 'circa ' + days + (days === 1 ? ' giorno' : ' giorni')}${days >= 1 ? ` (fino a ${fmtDate(until)})` : ''}`;
+    return `${level === LAST_STOCK_DAYS ? '⚠️ <b>Ultimo avviso scorte</b>' : '📦 <b>Scorte in esaurimento</b>'}\n<b>${esc(m.name)}</b>${m.dose ? ' ' + esc(m.dose) : ''} (${esc(this.person(c, m.person))}): restano ${m.stock} unità, ${howLong}.\nRicordati ricetta e farmacia. Quando lo ricompri: /farmaci → ${esc(m.name)} → 📦 Scorte.`;
   }
   unlog(c, date, key, m) {
     const e = this.getLog(c, date, key);
@@ -248,6 +258,11 @@ export class Store {
           await this.send(chatId, `⏰ <b>Te lo ricordo</b>\n` + this.doseText(c, m, s.date, s.time, n.date), this.doseKb(s.date, m.id, s.time));
         }
         changed = true;
+      }
+      // controllo scorte del mattino
+      if (n.min >= toMin(STOCK_CHECK_HM) && n.min - toMin(STOCK_CHECK_HM) <= 20 && c.stockCheck !== n.date) {
+        c.stockCheck = n.date; changed = true;
+        for (const m of c.meds) { const a = this.stockAlert(c, m); if (a) await this.send(chatId, a); }
       }
       // pulizia
       const keepSent = addDays(n.date, -1).date, keepLog = addDays(n.date, -90).date;
@@ -355,7 +370,7 @@ export class Store {
         let st = null;
         if (!isSkip(text)) { st = firstNum(text); if (isNaN(st) || st < 0) return this.ask(chatId, 'Scrivi solo il numero di compresse che hai, ad esempio <code>28</code>. Per saltare, scrivi <b>-</b> oppure <b>salta</b>.', mid, 'Es. 28'); }
         const today = romeParts().date;
-        const m = { id: rid(), person: d.person, name: d.name, dose: d.dose || '', times: d.times, days: d.days || [], qty: 1, stock: st, start: today, paused: false, lowWarned: false };
+        const m = { id: rid(), person: d.person, name: d.name, dose: d.dose || '', times: d.times, days: d.days || [], qty: 1, stock: st, start: today, paused: false, lowLevel: null };
         c.meds.push(m); delete c.flows[uid]; await save();
         return this.send(chatId, `✅ Salvato!\n\n${this.medText(c, m)}\n\nTi avviserò a ogni orario.`, { remove_keyboard: true, selective: true });
       }
@@ -392,8 +407,12 @@ export class Store {
         if (isSkip(text)) { m.stock = null; }
         else if (isNaN(st) || st < 0) return this.ask(chatId, 'Scrivi un numero, ad esempio <code>30</code> (oppure <b>-</b> per non contare le scorte).', mid, 'Es. 30');
         else m.stock = st;
-        m.lowWarned = false; delete c.flows[uid]; await save();
-        return this.send(chatId, m.stock == null ? `Scorte di <b>${esc(m.name)}</b> non più conteggiate.` : `📦 Scorte di <b>${esc(m.name)}</b>: ${m.stock} unità.`);
+        m.lowLevel = null; delete m.lowWarned;
+        const alert = this.stockAlert(c, m);
+        delete c.flows[uid]; await save();
+        await this.send(chatId, m.stock == null ? `Scorte di <b>${esc(m.name)}</b> non più conteggiate.` : `📦 Scorte di <b>${esc(m.name)}</b>: ${m.stock} unità.`);
+        if (alert) await this.send(chatId, alert);
+        return;
       }
     }
   }
