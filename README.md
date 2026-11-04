@@ -49,6 +49,8 @@ Puoi gestire anche i farmaci dei familiari: quando aggiungi un farmaco scegli pe
 
 **Condividere con la famiglia**: crea un gruppo Telegram, aggiungi il bot e scrivi `/start` nel gruppo (deve farlo chi ha creato il bot). Nel gruppo tutti possono aggiungere farmaci e segnare le dosi; i promemoria arrivano lì. Con `/trasferisci` sposti nel gruppo i farmaci di una persona dalla chat privata.
 
+**Gruppo semplice (solo promemoria)**: crea un altro gruppo, aggiungi il bot e scrivi `/collega` (deve farlo chi ha creato il bot), poi scegli il gruppo principale. Lì arriveranno solo i messaggi delle dosi con ✅ Preso / ⏰ / ⏭, sincronizzati con il gruppo principale; l'unico comando è `/oggi`. Per staccarlo: `/scollega`.
+
 ## Privacy
 
 Nomi, farmaci e orari sono salvati nel tuo account Cloudflare (Durable Object) e passano da Telegram. Lo storico viene cancellato dopo 90 giorni.

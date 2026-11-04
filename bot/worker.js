@@ -292,6 +292,15 @@ export class Store {
     return { inline_keyboard: [[{ text: '✅ Preso', callback_data: 'T|' + d }], [{ text: `⏰ ${SNOOZE_MIN} min`, callback_data: 'Z|' + d }, { text: '⏭ Salta', callback_data: 'S|' + d }]] };
   }
 
+  mirrorsOf(acl, src) { return Object.keys(acl.mirrors || {}).filter(k => acl.mirrors[k] === src); }
+  // aggiorna tutte le copie del promemoria (gruppo principale e gruppo semplice), tranne quella già modificata
+  async syncCopies(c, srcId, date, key, exceptChat, exceptMid, text, kb) {
+    const S = (c.sent[date] || {})[key];
+    if (!S) return;
+    const msgs = S.msgs || (S.m ? [[srcId, S.m]] : []);
+    for (const [ch, id] of msgs) if (!(String(ch) === String(exceptChat) && id === exceptMid)) await this.edit(ch, id, text, kb);
+  }
+
   /* ---------- promemoria (cron) ---------- */
   async tick(nowTs) {
     const n = romeParts(nowTs);
@@ -299,6 +308,8 @@ export class Store {
     for (const chatId of Object.keys(acl.chats)) {
       const c = await this.chat(chatId);
       let changed = false;
+      const targets = [chatId, ...this.mirrorsOf(acl, chatId)];
+      const sendAll = async (text, kb) => { const out = []; for (const t of targets) { const r = await this.send(t, text, kb); if (r.result) out.push([t, r.result.message_id]); } return out; };
       c.sent[n.date] = c.sent[n.date] || {};
       const sent = c.sent[n.date];
       for (const d of this.dosesOn(c, n.date, n.dow)) {
@@ -306,11 +317,12 @@ export class Store {
         const late = n.min - toMin(d.time);
         const S = sent[d.key];
         if (!S && late >= 0 && late <= 20) {
-          const r = await this.send(chatId, this.doseText(c, d.m, n.date, d.time), this.doseKb(n.date, d.m.id, d.time));
-          sent[d.key] = { m: r.result && r.result.message_id, f: 0 };
+          const msgs = await sendAll(this.doseText(c, d.m, n.date, d.time), this.doseKb(n.date, d.m.id, d.time));
+          sent[d.key] = { m: msgs.length && msgs[0][1], f: 0, msgs };
           changed = true;
         } else if (S && !S.f && late >= FOLLOW_UP_MIN && late <= 240) {
-          await this.send(chatId, `⏰ <b>Non ancora segnato</b>\n` + this.doseText(c, d.m, n.date, d.time), this.doseKb(n.date, d.m.id, d.time));
+          const msgs = await sendAll(`⏰ <b>Non ancora segnato</b>\n` + this.doseText(c, d.m, n.date, d.time), this.doseKb(n.date, d.m.id, d.time));
+          S.msgs = [...(S.msgs || (S.m ? [[chatId, S.m]] : [])), ...msgs];
           S.f = 1; changed = true;
         }
       }
@@ -320,7 +332,9 @@ export class Store {
         for (const s of due) {
           const m = c.meds.find(x => x.id === s.medId);
           if (!m || this.getLog(c, s.date, s.key)) continue;
-          await this.send(chatId, `⏰ <b>Te lo ricordo</b>\n` + this.doseText(c, m, s.date, s.time, n.date), this.doseKb(s.date, m.id, s.time));
+          const msgs = await sendAll(`⏰ <b>Te lo ricordo</b>\n` + this.doseText(c, m, s.date, s.time, n.date), this.doseKb(s.date, m.id, s.time));
+          const S2 = (c.sent[s.date] || {})[s.key];
+          if (S2) S2.msgs = [...(S2.msgs || (S2.m ? [[chatId, S2.m]] : [])), ...msgs];
         }
         changed = true;
       }
@@ -362,6 +376,25 @@ export class Store {
       acl.admin = uid; acl.chats[chatId] = name;
       await this.saveAcl(acl);
       return this.send(chatId, `Ciao ${esc(name)}! Questo bot ora è tuo: nessun altro potrà usarlo, tranne i gruppi in cui lo aggiungi tu.\n\n${HELP}`);
+    }
+    // Gruppo "solo promemoria": risponde solo a /oggi (e a /scollega dell'amministratore)
+    acl.mirrors = acl.mirrors || {};
+    if (acl.mirrors[chatId]) {
+      const src = acl.mirrors[chatId];
+      if (cmd === '/oggi') { const v = this.todayView(await this.chat(src)); return this.send(chatId, v.text, v.kb); }
+      if (cmd === '/scollega' && uid === acl.admin) {
+        delete acl.mirrors[chatId]; await this.saveAcl(acl);
+        await tg(this.env, 'deleteMyCommands', { scope: { type: 'chat', chat_id: Number(chatId) } });
+        return this.send(chatId, 'Gruppo scollegato: qui non arriveranno più promemoria.');
+      }
+      return;
+    }
+    if (cmd === '/collega' && !priv && uid === acl.admin) {
+      if (acl.chats[chatId] && (await this.chat(chatId)).meds.length) return this.send(chatId, 'Questo gruppo ha già dei farmaci suoi: crea un gruppo nuovo per i soli promemoria.');
+      const srcs = Object.keys(acl.chats).filter(id => id !== chatId);
+      if (!srcs.length) return this.send(chatId, 'Non ci sono gruppi da collegare.');
+      return this.send(chatId, 'Di quale gruppo vuoi ricevere qui i promemoria?\nIn questo gruppo arriveranno solo i messaggi delle dosi, con i pulsanti ✅ Preso, ⏰ e ⏭.',
+        { inline_keyboard: srcs.map(id => [{ text: id === acl.admin ? 'La mia chat privata' : acl.chats[id], callback_data: 'LK|' + id }]) });
     }
     // Accesso: la tua chat privata, e i gruppi che hai collegato tu (lì può usarlo chiunque del gruppo).
     if (!acl.chats[chatId]) {
@@ -848,10 +881,23 @@ export class Store {
     const chatId = String(q.message.chat.id), mid = q.message.message_id, uid = String(q.from.id), who = q.from.first_name || '';
     const acl = await this.acl();
 
-    if (!acl.chats[chatId]) return ans('Chat non autorizzata');
-    const c = await this.chat(chatId);
+    if (data.startsWith('LK|')) {
+      if (uid !== acl.admin) return ans('Solo chi ha creato il bot può farlo');
+      const src = data.slice(3);
+      if (!acl.chats[src] || src === chatId) return ans();
+      acl.mirrors = acl.mirrors || {}; acl.mirrors[chatId] = src; delete acl.chats[chatId];
+      await this.saveAcl(acl);
+      await tg(this.env, 'setMyCommands', { commands: [{ command: 'oggi', description: 'Dosi di oggi' }], scope: { type: 'chat', chat_id: Number(chatId) } });
+      await this.edit(chatId, mid, `✅ Fatto! Qui arriveranno i promemoria di <b>${esc(src === acl.admin ? 'chat privata' : acl.chats[src])}</b>.\n\nQuando arriva un messaggio basta toccare:\n✅ <b>Preso</b> quando la dose è stata data\n⏰ <b>10 min</b> per ricordarlo più tardi\n⏭ <b>Salta</b> se oggi non va data\n\nPer vedere le dosi della giornata: /oggi`);
+      return ans('Collegato');
+    }
+    const dataId = (acl.mirrors || {})[chatId] || chatId;   // nei gruppi semplici i dati sono quelli del gruppo principale
+    const isMirror = dataId !== chatId;
+    if (!acl.chats[dataId]) return ans('Chat non autorizzata');
+    const c = await this.chat(dataId);
     const [k, ...r] = data.split('|');
     const today = romeParts().date;
+    if (isMirror && !['T', 'S', 'Z', 'U', 'O', 'OR'].includes(k)) return ans();
 
     if (['T', 'S', 'Z', 'U', 'O'].includes(k)) {
       const [date, medId, time] = r;
@@ -860,22 +906,27 @@ export class Store {
       const key = medId + '@' + time;
       if (k === 'O') {
         const low = this.getLog(c, date, key) ? null : this.logDose(c, date, key, m, 'taken', who);
-        await this.saveChat(chatId, c);
+        await this.saveChat(dataId, c);
         const v = this.todayView(c); await this.edit(chatId, mid, v.text, v.kb);
-        if (low) await this.send(chatId, low);
+        await this.syncCopies(c, dataId, date, key, null, null, this.doseText(c, m, date, time, today) + `\n\n✅ Preso alle ${hmOf(Date.now())}${who ? ' · ' + esc(who) : ''}`,
+          { inline_keyboard: [[{ text: '↩️ Annulla', callback_data: `U|${date}|${medId}|${time}` }]] });
+        if (low) await this.send(dataId, low);
         return ans('Segnato come preso');
       }
       if (k === 'T' || k === 'S') {
         const low = this.logDose(c, date, key, m, k === 'T' ? 'taken' : 'skipped', who);
-        await this.saveChat(chatId, c);
-        await this.edit(chatId, mid, this.doseText(c, m, date, time, today) + `\n\n${k === 'T' ? '✅ Preso' : '⏭ Saltato'} alle ${hmOf(Date.now())}${who ? ' · ' + esc(who) : ''}`,
-          { inline_keyboard: [[{ text: '↩️ Annulla', callback_data: `U|${date}|${medId}|${time}` }]] });
-        if (low) await this.send(chatId, low);
+        await this.saveChat(dataId, c);
+        const txt = this.doseText(c, m, date, time, today) + `\n\n${k === 'T' ? '✅ Preso' : '⏭ Saltato'} alle ${hmOf(Date.now())}${who ? ' · ' + esc(who) : ''}`;
+        const kbU = { inline_keyboard: [[{ text: '↩️ Annulla', callback_data: `U|${date}|${medId}|${time}` }]] };
+        await this.edit(chatId, mid, txt, kbU);
+        await this.syncCopies(c, dataId, date, key, chatId, mid, txt, kbU);
+        if (low) await this.send(dataId, low);
         return ans(k === 'T' ? 'Segnato come preso' : 'Segnato come saltato');
       }
       if (k === 'U') {
-        this.unlog(c, date, key, m); await this.saveChat(chatId, c);
+        this.unlog(c, date, key, m); await this.saveChat(dataId, c);
         await this.edit(chatId, mid, this.doseText(c, m, date, time, today), this.doseKb(date, medId, time));
+        await this.syncCopies(c, dataId, date, key, chatId, mid, this.doseText(c, m, date, time, today), this.doseKb(date, medId, time));
         return ans('Annullato');
       }
       if (k === 'Z') {
@@ -884,8 +935,10 @@ export class Store {
         c.snooze = c.snooze.filter(s => !(s.key === key && s.date === date));
         c.snooze.push({ date, key, medId, time, at });
         const S = (c.sent[date] || {})[key]; if (S) S.f = 1;
-        await this.saveChat(chatId, c);
-        await this.edit(chatId, mid, this.doseText(c, m, date, time, today) + `\n\n⏰ Te lo ricordo alle ${hmOf(at)}`);
+        await this.saveChat(dataId, c);
+        const zt = this.doseText(c, m, date, time, today) + `\n\n⏰ Rimandato alle ${hmOf(at)}${who ? ' · ' + esc(who) : ''}`;
+        await this.edit(chatId, mid, zt);
+        await this.syncCopies(c, dataId, date, key, chatId, mid, zt);
         return ans(`Rimandato di ${SNOOZE_MIN} minuti`);
       }
     }
@@ -903,16 +956,16 @@ export class Store {
       const p = c.persons.find(x => x.id === pid);
       if (!p) return ans();
       if (k !== 'RI' && p.info && p.info.full && p.info.to === undefined) {
-        c.flows[uid] = { step: 'pinfo_to', d: { pid: p.id, who } }; await this.saveChat(chatId, c);
+        c.flows[uid] = { step: 'pinfo_to', d: { pid: p.id, who } }; await this.saveChat(dataId, c);
         await this.askTo(chatId, null);
         return ans();
       }
       if (k === 'RI' || !(p.info && p.info.full)) {
-        c.flows[uid] = { step: 'pinfo_name', d: { pid: p.id, who } }; await this.saveChat(chatId, c);
+        c.flows[uid] = { step: 'pinfo_name', d: { pid: p.id, who } }; await this.saveChat(dataId, c);
         await this.ask(chatId, `Per la richiesta al medico mi servono i dati dell'assistita (li ricordo per le prossime volte).\n\nNome e cognome di <b>${esc(p.name)}</b>?`, null, 'Es. Maria Rossi');
         return ans();
       }
-      this.startReq(c, uid, p.id); await this.saveChat(chatId, c);
+      this.startReq(c, uid, p.id); await this.saveChat(dataId, c);
       const v = this.reqView(c, uid, who); await this.send(chatId, v.text, v.kb);
       return ans();
     }
@@ -921,11 +974,11 @@ export class Store {
       if (!fl2 || !fl2.req) return ans('Ricomincia da /scorte');
       const id = r[0]; const sel = fl2.req.sel;
       fl2.req.sel = sel.includes(id) ? sel.filter(x => x !== id) : [...sel, id];
-      await this.saveChat(chatId, c);
+      await this.saveChat(dataId, c);
       const v = this.reqView(c, uid, who); await this.edit(chatId, mid, v.text, v.kb);
       return ans();
     }
-    if (k === 'RX') { delete c.flows[uid]; await this.saveChat(chatId, c); await this.edit(chatId, mid, 'Richiesta chiusa.'); return ans(); }
+    if (k === 'RX') { delete c.flows[uid]; await this.saveChat(dataId, c); await this.edit(chatId, mid, 'Richiesta chiusa.'); return ans(); }
     if (k === 'OR') { const v = this.todayView(c); await this.edit(chatId, mid, v.text, v.kb); return ans('Aggiornato'); }
 
     if (k === 'TR') {
@@ -946,14 +999,14 @@ export class Store {
       pc.meds = pc.meds.filter(m => !ids.has(m.id));
       pc.snooze = pc.snooze.filter(s => !ids.has(s.medId));
       pc.persons = pc.persons.filter(x => x.id !== p.id);
-      await this.saveChat(chatId, c); await this.saveChat(acl.admin, pc);
+      await this.saveChat(dataId, c); await this.saveChat(acl.admin, pc);
       await this.edit(chatId, mid, `✅ Spostati qui ${moving.length} ${moving.length === 1 ? 'farmaco' : 'farmaci'} di <b>${esc(p.name)}</b>. Da ora i loro promemoria arrivano in questo gruppo.`);
       return ans('Trasferiti');
     }
 
     // aggiunta guidata
     const fl = c.flows[uid];
-    if (k === 'X') { delete c.flows[uid]; await this.saveChat(chatId, c); await this.edit(chatId, mid, 'Operazione annullata.'); return ans(); }
+    if (k === 'X') { delete c.flows[uid]; await this.saveChat(dataId, c); await this.edit(chatId, mid, 'Operazione annullata.'); return ans(); }
     if (k === 'PC') {
       if (!fl) return ans('Ricomincia con /aggiungi');
       await this.personPicker(chatId, c, uid, mid);
@@ -962,7 +1015,7 @@ export class Store {
     if (k === 'P' || k === 'PN' || k === 'D') {
       if (!fl) return ans('Ricomincia con /aggiungi');
       if (k === 'PN') {
-        fl.step = 'pname'; await this.saveChat(chatId, c);
+        fl.step = 'pname'; await this.saveChat(dataId, c);
         await this.edit(chatId, mid, '💊 <b>Nuovo farmaco</b>');
         await this.ask(chatId, 'Come si chiama la persona? (es. Nonno, Mamma, Marco)', null, 'Nome');
         return ans();
@@ -970,14 +1023,14 @@ export class Store {
       if (k === 'P') {
         const p = c.persons.find(x => x.id === r[0]);
         if (!p || fl.step !== 'person') return ans();
-        fl.d.person = p.id; fl.step = 'name'; await this.saveChat(chatId, c);
+        fl.d.person = p.id; fl.step = 'name'; await this.saveChat(dataId, c);
         await this.edit(chatId, mid, `💊 <b>Nuovo farmaco</b> per ${esc(p.name)}`);
         await this.ask(chatId, 'Come si chiama il farmaco?', null, 'Es. Ramipril');
         return ans();
       }
       if (k === 'D') {
         if (fl.step !== 'days') return ans();
-        if (r[0] === 'all') { fl.d.days = []; fl.step = 'dur'; await this.saveChat(chatId, c); await this.edit(chatId, mid, `Orari: <b>${fl.d.times.join(', ')}</b>, tutti i giorni.`); await this.askDur(chatId, null); }
+        if (r[0] === 'all') { fl.d.days = []; fl.step = 'dur'; await this.saveChat(dataId, c); await this.edit(chatId, mid, `Orari: <b>${fl.d.times.join(', ')}</b>, tutti i giorni.`); await this.askDur(chatId, null); }
         else { await this.edit(chatId, mid, `Orari: <b>${fl.d.times.join(', ')}</b>`); await this.ask(chatId, 'In quali giorni della settimana? Ad esempio <code>lun</code> oppure <code>lun mer ven</code>.\nSe va preso tutti i giorni scrivi <b>tutti</b>.', null, 'Es. lun mer ven'); }
         return ans();
       }
@@ -989,15 +1042,15 @@ export class Store {
     const m = c.meds.find(x => x.id === r[0]);
     if (['MM', 'MP', 'MS', 'MD', 'MDY', 'ME', 'MW', 'MWP', 'MWN', 'MT', 'MTC', 'MTE', 'MTX', 'MTS', 'MA', 'MAY', 'MR'].includes(k) && !m) { const v = this.medsView(c); await this.edit(chatId, mid, v.text, v.kb); return ans('Farmaco non trovato'); }
     if (k === 'MM') { const v = this.medDetail(c, m); await this.edit(chatId, mid, v.text, v.kb); return ans(); }
-    if (k === 'MP') { m.paused = !m.paused; await this.saveChat(chatId, c); const v = this.medDetail(c, m); await this.edit(chatId, mid, v.text, v.kb); return ans(m.paused ? 'In pausa: niente promemoria' : 'Promemoria riattivati'); }
+    if (k === 'MP') { m.paused = !m.paused; await this.saveChat(dataId, c); const v = this.medDetail(c, m); await this.edit(chatId, mid, v.text, v.kb); return ans(m.paused ? 'In pausa: niente promemoria' : 'Promemoria riattivati'); }
     if (k === 'MT') { const v = this.planView(c, m); await this.edit(chatId, mid, v.text, v.kb); return ans(); }
     if (k === 'MTC') {
-      c.flows[uid] = { step: 'pfrom', d: { med: m.id } }; await this.saveChat(chatId, c);
+      c.flows[uid] = { step: 'pfrom', d: { med: m.id } }; await this.saveChat(dataId, c);
       await this.ask(chatId, `Da quale giorno cambiano gli orari di <b>${esc(m.name)}</b>?\nScrivi una data (es. <code>8/11</code>) oppure <code>tra 4 giorni</code>.`, null, 'Es. 8/11');
       return ans();
     }
     if (k === 'MTE') {
-      c.flows[uid] = { step: 'pend', d: { med: m.id } }; await this.saveChat(chatId, c);
+      c.flows[uid] = { step: 'pend', d: { med: m.id } }; await this.saveChat(dataId, c);
       await this.ask(chatId, `Qual è l'ultimo giorno di terapia di <b>${esc(m.name)}</b>?${m.end ? ` (ora: ${fmtDate(m.end)})` : ''}\nScrivi una data (es. <code>11/11</code>), oppure <b>-</b> se è cronica.`, null, 'Es. 11/11');
       return ans();
     }
@@ -1010,25 +1063,25 @@ export class Store {
       const today = romeParts().date;
       m.archived = today; m.end = (m.end && m.end < today) ? m.end : today; m.endNotified = true;
       c.snooze = c.snooze.filter(x => x.medId !== m.id);
-      await this.saveChat(chatId, c);
+      await this.saveChat(dataId, c);
       const v = this.medsView(c);
       await this.edit(chatId, mid, `🗂 ${esc(m.name)} archiviato: lo trovi in /storico e in /farmaci → Terapie concluse.\n\n` + v.text, v.kb);
       return ans('Archiviato');
     }
     if (k === 'MR') {
       delete m.archived; m.end = ''; delete m.endNotified;
-      await this.saveChat(chatId, c);
+      await this.saveChat(dataId, c);
       const v = this.medDetail(c, m);
       await this.edit(chatId, mid, '♻️ Riattivato: i promemoria ripartono.\n\n' + v.text, v.kb);
       return ans('Riattivato');
     }
     if (k === 'MTS') {
-      c.flows[uid] = { step: 'psince', d: { med: m.id } }; await this.saveChat(chatId, c);
+      c.flows[uid] = { step: 'psince', d: { med: m.id } }; await this.saveChat(dataId, c);
       await this.ask(chatId, `Quando è iniziata la terapia con <b>${esc(m.name)}</b>?\nScrivi la data, ad esempio <code>3/11</code>.`, null, 'Es. 3/11');
       return ans();
     }
     if (k === 'MTX') {
-      m.plan = []; m.end = ''; delete m.endNotified; delete m.archived; await this.saveChat(chatId, c);
+      m.plan = []; m.end = ''; delete m.endNotified; delete m.archived; await this.saveChat(dataId, c);
       const v = this.planView(c, m); await this.edit(chatId, mid, '🧹 Cambi e fine tolti.\n\n' + v.text, v.kb);
       return ans();
     }
@@ -1043,19 +1096,19 @@ export class Store {
       if (!p) return ans();
       m.person = p.id;
       c.persons = c.persons.filter(x => c.meds.some(y => y.person === x.id));
-      await this.saveChat(chatId, c);
+      await this.saveChat(dataId, c);
       const v = this.medDetail(c, m); await this.edit(chatId, mid, `✅ Ora è di ${esc(p.name)}.\n\n` + v.text, v.kb);
       return ans('Spostato');
     }
     if (k === 'MWN') {
-      c.flows[uid] = { step: 'mpname', d: { med: m.id } }; await this.saveChat(chatId, c);
+      c.flows[uid] = { step: 'mpname', d: { med: m.id } }; await this.saveChat(dataId, c);
       await this.ask(chatId, `Come si chiama la persona che prende <b>${esc(m.name)}</b>? (es. Mamma)`, null, 'Nome');
       return ans();
     }
     if (k === 'ME') {
       const field = r[1];
       if (!['name', 'dose', 'times'].includes(field)) return ans();
-      c.flows[uid] = { step: 'edit', d: { med: m.id, field } }; await this.saveChat(chatId, c);
+      c.flows[uid] = { step: 'edit', d: { med: m.id, field } }; await this.saveChat(dataId, c);
       const q = {
         name: [`Nuovo nome per <b>${esc(m.name)}</b>?`, 'Nome del farmaco'],
         dose: [`Nuovo dosaggio per <b>${esc(m.name)}</b>?${m.dose ? ` (ora: ${esc(m.dose)})` : ''}\nScrivi <b>salta</b> per toglierlo.`, 'Es. 400 mg'],
@@ -1065,7 +1118,7 @@ export class Store {
       return ans();
     }
     if (k === 'MS') {
-      c.flows[uid] = { step: 'restock', d: { med: m.id } }; await this.saveChat(chatId, c);
+      c.flows[uid] = { step: 'restock', d: { med: m.id } }; await this.saveChat(dataId, c);
       await this.ask(chatId, `Quante unità di <b>${esc(m.name)}</b> hai adesso?${m.stock != null ? ` (ora: ${m.stock})` : ''}\nScrivi <b>-</b> per non contarle.`, null, 'Es. 30');
       return ans();
     }
@@ -1079,7 +1132,7 @@ export class Store {
       for (const dk of Object.keys(c.log)) { for (const key of Object.keys(c.log[dk])) if (key.startsWith(m.id + '@')) delete c.log[dk][key]; if (!Object.keys(c.log[dk]).length) delete c.log[dk]; }
       c.snooze = c.snooze.filter(s => s.medId !== m.id);
       c.persons = c.persons.filter(p => c.meds.some(x => x.person === p.id));
-      await this.saveChat(chatId, c);
+      await this.saveChat(dataId, c);
       const v = this.medsView(c); await this.edit(chatId, mid, `🗑 ${esc(m.name)} eliminato.\n\n` + v.text, v.kb);
       return ans('Eliminato');
     }
