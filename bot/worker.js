@@ -780,7 +780,7 @@ export class Store {
     let wa = `Buongiorno${info.to ? ' ' + info.to : ''}, vorrei richiedere ${chosen.length === 1 ? 'la ricetta' : 'le ricette'} per:\n*${info.full || p.name}*`;
     if (info.birth) wa += `\nData di nascita: ${info.birth}`;
     if (info.cf) wa += `\nC.F. ${info.cf}`;
-    wa += '\n' + chosen.map(m => `• ${m.name}${m.dose ? ' ' + m.dose : ''}`).join('\n') + `\nGrazie${who ? ',\n' + who : ''}`;
+    wa += '\n\n' + chosen.map(m => `• ${m.name}${m.dose ? ' ' + m.dose : ''}`).join('\n') + `\n\nGrazie${who ? ',\n' + who : ''}`;
     const text = `📤 <b>Richiesta ricette</b> — ${esc(info.full || p.name)}${info.to ? '\nDestinatario: ' + esc(info.to) : ''}${info.birth ? '\nData di nascita: ' + esc(info.birth) : ''}${info.cf ? '\nC.F. ' + esc(info.cf) : ''}\n\nTocca i farmaci per sceglierli (✅ = da richiedere). Sono già selezionati quelli con ${YELLOW_DAYS} giorni o meno.`;
     const kb = uniq.map(m => { const d = left(m); return [{ text: `${rq.sel.includes(m.id) ? '✅' : '⬜'} ${m.name}${m.dose ? ' ' + m.dose : ''}${d != null ? ` · ${d} gg` : ''}`.slice(0, 60), callback_data: 'RT|' + m.id }]; });
     if (chosen.length) kb.push([{ text: `📤 Invia su WhatsApp (${chosen.length})`, url: 'https://wa.me/?text=' + encodeURIComponent(wa) }]);
