@@ -293,6 +293,24 @@ export class Store {
     return null;
   }
   // Avviso scorte: a 7 giorni e poi a 2 giorni, una volta per livello.
+  packKb(m) {
+    const rows = [];
+    if (m.pack) rows.push([{ text: `➕ 1 confezione (+${m.pack})`, callback_data: `SA|${m.id}|1` }, { text: `➕ 2 (+${m.pack * 2})`, callback_data: `SA|${m.id}|2` }]);
+    rows.push([{ text: m.pack ? '📦 Scorte' : '📦 Aggiorna scorte', callback_data: 'SK|' + m.id }]);
+    return { inline_keyboard: rows };
+  }
+  stockCard(c, m, note) {
+    const left = (m.stock != null && m.times.length) ? Math.floor(m.stock / this.perDay(m)) : null;
+    let t = `${note ? note + '\n\n' : ''}📦 <b>${esc(m.name)}</b>${m.dose ? ' ' + esc(m.dose) : ''}${this.pp(c, m.person)}\n`;
+    t += m.stock == null ? 'Scorte non conteggiate.' : `Scorte: <b>${m.stock}</b> compresse${left != null ? `, circa ${left} ${left === 1 ? 'giorno' : 'giorni'}` : ''}.`;
+    t += m.pack ? `\nConfezione da ${m.pack}.` : '\nNon so ancora quante compresse ci sono in una confezione.';
+    const kb = [];
+    if (m.pack) kb.push([{ text: `➕ 1 confezione (+${m.pack})`, callback_data: `SA|${m.id}|1` }, { text: `➕ 2 confezioni (+${m.pack * 2})`, callback_data: `SA|${m.id}|2` }]);
+    else kb.push([{ text: '⚙️ Imposta compresse per confezione', callback_data: 'PK|' + m.id }]);
+    kb.push([{ text: '✏️ Scrivi il numero', callback_data: 'MS|' + m.id }].concat(m.pack ? [{ text: '⚙️ Confezione', callback_data: 'PK|' + m.id }] : []));
+    kb.push([{ text: '⬅️ Farmaco', callback_data: 'MM|' + m.id }]);
+    return { text: t, kb: { inline_keyboard: kb } };
+  }
   stockAlert(c, m) {
     if (m.stock == null || m.paused || !m.times.length || this.ended(m, romeParts().date)) return null;
     const left = m.stock / this.perDay(m);
@@ -302,7 +320,8 @@ export class Store {
     const days = Math.floor(left);
     const until = addDays(romeParts().date, days).date;
     const howLong = m.stock === 0 ? '<b>sono finite</b>' : `bastano per ${days < 1 ? 'meno di un giorno' : 'circa ' + days + (days === 1 ? ' giorno' : ' giorni')}${days >= 1 ? ` (fino a ${fmtDate(until)})` : ''}`;
-    return `${level === LAST_STOCK_DAYS ? '⚠️ <b>Ultimo avviso scorte</b>' : '📦 <b>Scorte in esaurimento</b>'}\n<b>${esc(m.name)}</b>${m.dose ? ' ' + esc(m.dose) : ''}${this.pp(c, m.person)}: restano ${m.stock} unità, ${howLong}.\nRicordati ricetta e farmacia. Quando lo ricompri: /farmaci → ${esc(m.name)} → 📦 Scorte.`;
+    const text = `${level === LAST_STOCK_DAYS ? '⚠️ <b>Ultimo avviso scorte</b>' : '📦 <b>Scorte in esaurimento</b>'}\n<b>${esc(m.name)}</b>${m.dose ? ' ' + esc(m.dose) : ''}${this.pp(c, m.person)}: restano ${m.stock} unità, ${howLong}.\nRicordati ricetta e farmacia. Quando lo ricomprate, toccate qui sotto.`;
+    return { text, kb: this.packKb(m) };
   }
   unlog(c, date, key, m) {
     const e = this.getLog(c, date, key);
@@ -426,7 +445,7 @@ export class Store {
       // controllo scorte del mattino
       if (n.min >= toMin(STOCK_CHECK_HM) && n.min - toMin(STOCK_CHECK_HM) <= 20 && c.stockCheck !== n.date) {
         c.stockCheck = n.date; changed = true;
-        for (const m of c.meds) { const a = this.stockAlert(c, m); if (a) await this.send(chatId, a); }
+        for (const m of c.meds) { const a = this.stockAlert(c, m); if (a) await this.send(chatId, a.text, a.kb); }
         for (const m of c.meds) if (this.ended(m, n.date) && !m.endNotified) {
           m.endNotified = true;
           await this.send(chatId, `🏁 <b>Terapia conclusa</b>\n${esc(m.name)}${m.dose ? ' ' + esc(m.dose) : ''}${this.pp(c, m.person)}: l'ultimo giorno era ${fmtDate(m.end)}. Non mando più promemoria; la trovi in /storico tra le terapie concluse.`,
@@ -520,7 +539,15 @@ export class Store {
         case '/farmaci': { const v = this.medsView(c); return this.send(chatId, v.text, v.kb); }
         case '/scorte': {
           const has = c.meds.some(m => !this.ended(m, romeParts().date));
-          return this.send(chatId, this.stockView(c), has ? { inline_keyboard: [[{ text: '📤 Richiedi ricette', callback_data: 'RQ' }]] } : undefined);
+          if (!has) return this.send(chatId, this.stockView(c));
+          const td = romeParts().date;
+          const dl = m => (m.stock == null || !m.times.length) ? Infinity : m.stock / this.perDay(m);
+          const ms = c.meds.filter(m => !this.ended(m, td)).sort((a, b) => dl(a) - dl(b) || a.name.localeCompare(b.name, 'it', { sensitivity: 'base' }));
+          const seen = new Set(); const uniq = ms.filter(m => { const k2 = (m.name + '|' + m.dose).toLowerCase(); if (seen.has(k2)) return false; seen.add(k2); return true; });
+          const rows = [];
+          for (let i = 0; i < uniq.length; i += 2) rows.push(uniq.slice(i, i + 2).map(m => ({ text: `📦 ${m.name}`.slice(0, 32), callback_data: 'SK|' + m.id })));
+          rows.push([{ text: '📤 Richiedi ricette', callback_data: 'RQ' }]);
+          return this.send(chatId, this.stockView(c) + '\n\nTocca un farmaco per aggiungere una confezione.', { inline_keyboard: rows });
         }
         case '/storico': return this.send(chatId, this.historyView(c));
         case '/esporta': return this.send(chatId, this.exportView(c, msg.chat.title));
@@ -621,8 +648,23 @@ export class Store {
         if (!isSkip(text)) { st = firstNum(text); if (isNaN(st) || st < 0) return this.ask(chatId, 'Scrivi solo il numero di compresse che hai, ad esempio <code>28</code>. Per saltare, scrivi <b>-</b> oppure <b>salta</b>.', mid, 'Es. 28'); }
         const today = romeParts().date;
         const m = { id: rid(), person: d.person, name: d.name, dose: d.dose || '', times: d.times, days: d.days || [], qty: 1, stock: st, since: d.start || '', start: d.start && d.start > today ? d.start : today, end: d.end || '', paused: false, lowLevel: null };
-        c.meds.push(m); delete c.flows[uid]; await save();
+        c.meds.push(m);
+        if (st != null) {   // chiediamo subito quante compresse ci sono in una confezione
+          c.flows[uid] = { step: 'pack', d: { med: m.id, fromAdd: true } }; await save();
+          await this.send(chatId, `✅ Salvato!\n\n${this.medText(c, m)}\n\nTi avviserò a ogni orario.`, { remove_keyboard: true, selective: true });
+          return this.ask(chatId, 'Ultima domanda: quante compresse ci sono in <b>una confezione</b>? Così quando lo ricomprate basta toccare "➕ 1 confezione".\nScrivi <b>-</b> per saltare.', mid, 'Es. 30');
+        }
+        delete c.flows[uid]; await save();
         return this.send(chatId, `✅ Salvato!\n\n${this.medText(c, m)}\n\nTi avviserò a ogni orario.`, { remove_keyboard: true, selective: true });
+      }
+      case 'pack': {
+        const m = c.meds.find(x => x.id === d.med);
+        if (!m) { delete c.flows[uid]; await save(); return this.send(chatId, 'Il farmaco non esiste più.'); }
+        if (isSkip(text)) m.pack = null;
+        else { const v = firstNum(text); if (isNaN(v) || v <= 0) return this.ask(chatId, 'Scrivi solo il numero, ad esempio <code>30</code>.', mid, 'Es. 30'); m.pack = v; }
+        delete c.flows[uid]; await save();
+        const v = this.stockCard(c, m, d.fromAdd ? '✅ Salvato!' : '✅ Fatto.');
+        return this.send(chatId, v.text, v.kb);
       }
       case 'mpname': {
         const m = c.meds.find(x => x.id === d.med);
@@ -735,7 +777,7 @@ export class Store {
         const alert = this.stockAlert(c, m);
         delete c.flows[uid]; await save();
         await this.send(chatId, m.stock == null ? `Scorte di <b>${esc(m.name)}</b> non più conteggiate.` : `📦 Scorte di <b>${esc(m.name)}</b>: ${m.stock} unità.`);
-        if (alert) await this.send(chatId, alert);
+        if (alert) await this.send(chatId, alert.text, alert.kb);
         return;
       }
     }
@@ -902,7 +944,7 @@ export class Store {
       text: this.medText(c, m), kb: {
         inline_keyboard: [
           [{ text: '✏️ Nome', callback_data: 'ME|' + m.id + '|name' }, { text: '✏️ Dosaggio', callback_data: 'ME|' + m.id + '|dose' }, { text: '🕐 Orari', callback_data: 'ME|' + m.id + '|times' }],
-          [{ text: '👤 Persona', callback_data: 'MW|' + m.id }, { text: m.paused ? '▶️ Riprendi' : '⏸ Pausa', callback_data: 'MP|' + m.id }, { text: '📦 Scorte', callback_data: 'MS|' + m.id }],
+          [{ text: '👤 Persona', callback_data: 'MW|' + m.id }, { text: m.paused ? '▶️ Riprendi' : '⏸ Pausa', callback_data: 'MP|' + m.id }, { text: '📦 Scorte', callback_data: 'SK|' + m.id }],
           [{ text: '📆 Programma', callback_data: 'MT|' + m.id }, this.ended(m, romeParts().date) ? { text: '♻️ Riattiva', callback_data: 'MR|' + m.id } : { text: '🗂 Archivia', callback_data: 'MA|' + m.id }],
           [{ text: '🗑 Elimina', callback_data: 'MD|' + m.id }, { text: '⬅️ Elenco', callback_data: 'ML' }]
         ]
@@ -951,7 +993,7 @@ export class Store {
       const txt = `${esc(m.name)}${this.pp(c, m.person)}: ${m.stock} unità, ${d < 1 ? 'meno di un giorno' : 'circa ' + d + (d === 1 ? ' giorno' : ' giorni')}`;
       return `${dot} ${dot === '🔴' ? '<b>' + txt + '</b>' : txt}`;
     });
-    return `📦 <b>Scorte</b>\n\n${lines.join('\n')}\n\n🟢 più di ${YELLOW_DAYS} giorni · 🟡 ${YELLOW_DAYS} giorni o meno · 🔴 ${LOW_STOCK_DAYS} giorni o meno · ⚪ non conteggiate\nPer aggiornarle: /farmaci → farmaco → 📦 Scorte.`;
+    return `📦 <b>Scorte</b>\n\n${lines.join('\n')}\n\n🟢 più di ${YELLOW_DAYS} giorni · 🟡 ${YELLOW_DAYS} giorni o meno · 🔴 ${LOW_STOCK_DAYS} giorni o meno · ⚪ non conteggiate`;
   }
   // "4 volte al giorno dal 3/11 al 9/11, 3 volte al giorno dal 10/11 al 16/11"
   periodLine(m) {
@@ -1053,7 +1095,7 @@ export class Store {
       }
       await this.syncCopies(c, dataId, date, key, isMirror ? null : chatId, isMirror ? null : mid, txt, kb, mset);
       await this.refreshPanels(acl, dataId, c);
-      if (low) await this.send(dataId, low);
+      if (low) await this.send(dataId, low.text, low.kb);
       return ans(answer);
     }
     if (k === 'TP' && isMirror) { await this.mirrorTherapy(acl, realId, c, acl.chats[dataId], true); return ans('Terapia qui sotto 👇'); }
@@ -1159,7 +1201,7 @@ export class Store {
     if (k === 'MC') { const v = this.doneView(c); await this.edit(chatId, mid, v.text, v.kb); return ans(); }
     if (k === 'ML') { const v = this.medsView(c); await this.edit(chatId, mid, v.text, v.kb); return ans(); }
     const m = c.meds.find(x => x.id === r[0]);
-    if (['MM', 'MP', 'MS', 'MD', 'MDY', 'ME', 'MW', 'MWP', 'MWN', 'MT', 'MTC', 'MTE', 'MTX', 'MTS', 'MA', 'MAY', 'MR'].includes(k) && !m) { const v = this.medsView(c); await this.edit(chatId, mid, v.text, v.kb); return ans('Farmaco non trovato'); }
+    if (['MM', 'MP', 'MS', 'MD', 'MDY', 'ME', 'MW', 'MWP', 'MWN', 'MT', 'MTC', 'MTE', 'MTX', 'MTS', 'MA', 'MAY', 'MR', 'SK', 'SA', 'SU', 'PK'].includes(k) && !m) { const v = this.medsView(c); await this.edit(chatId, mid, v.text, v.kb); return ans('Farmaco non trovato'); }
     if (k === 'MM') { const v = this.medDetail(c, m); await this.edit(chatId, mid, v.text, v.kb); return ans(); }
     if (k === 'MP') { m.paused = !m.paused; await this.saveChat(dataId, c); const v = this.medDetail(c, m); await this.edit(chatId, mid, v.text, v.kb); return ans(m.paused ? 'In pausa: niente promemoria' : 'Promemoria riattivati'); }
     if (k === 'MT') { const v = this.planView(c, m); await this.edit(chatId, mid, v.text, v.kb); return ans(); }
@@ -1234,6 +1276,23 @@ export class Store {
         times: [`Nuovi orari per <b>${esc(m.name)}</b>? (ora: ${m.times.join(', ')})\nScrivili tutti, ad esempio <code>8 13 18 23</code>.`, 'Es. 8 20']
       }[field];
       await this.ask(chatId, q[0], null, q[1]);
+      return ans();
+    }
+    if (k === 'SK') { const v = this.stockCard(c, m); await this.edit(chatId, mid, v.text, v.kb); return ans(); }
+    if (k === 'SA' || k === 'SU') {
+      const q = k === 'SA' ? (m.pack || 0) * (parseInt(r[1], 10) || 1) : (parseInt(r[1], 10) || 0);
+      if (!q) return ans();
+      m.stock = Math.max(0, (m.stock || 0) + (k === 'SA' ? q : -q));
+      if (k === 'SA') { m.lowLevel = null; delete m.lowWarned; }
+      await this.saveChat(dataId, c);
+      const v = this.stockCard(c, m, k === 'SA' ? `✅ Aggiunte ${q} compresse${who ? ' · ' + esc(who) : ''}.` : `↩️ Tolte ${q} compresse.`);
+      if (k === 'SA') v.kb.inline_keyboard.unshift([{ text: `↩️ Annulla (−${q})`, callback_data: `SU|${m.id}|${q}` }]);
+      await this.edit(chatId, mid, v.text, v.kb);
+      return ans(k === 'SA' ? `+${q} compresse` : 'Annullato');
+    }
+    if (k === 'PK') {
+      c.flows[uid] = { step: 'pack', d: { med: m.id } }; await this.saveChat(dataId, c);
+      await this.ask(chatId, `Quante compresse (o unità) ci sono in una confezione di <b>${esc(m.name)}</b>?${m.pack ? ` (ora: ${m.pack})` : ''}`, null, 'Es. 30');
       return ans();
     }
     if (k === 'MS') {
