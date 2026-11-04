@@ -57,9 +57,10 @@ function parseDays(s) {
 }
 const daysText = days => (!days.length || days.length === 7) ? 'tutti i giorni' : [1, 2, 3, 4, 5, 6, 0].filter(d => days.includes(d)).map(d => DOW_SHORT[d]).join(', ');
 
+const botToken = env => String(env.TELEGRAM_BOT_TOKEN || '').trim().replace(/^bot/i, '').replace(/\s+/g, '');
 async function tg(env, method, body) {
   const base = env.TG_API || 'https://api.telegram.org';
-  const r = await fetch(`${base}/bot${env.TELEGRAM_BOT_TOKEN}/${method}`, {
+  const r = await fetch(`${base}/bot${botToken(env)}/${method}`, {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body)
   });
   const j = await r.json().catch(() => ({ ok: false }));
@@ -67,7 +68,7 @@ async function tg(env, method, body) {
   return j;
 }
 async function webhookSecret(env) {
-  const h = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('pf:' + env.TELEGRAM_BOT_TOKEN));
+  const h = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('pf:' + botToken(env)));
   return [...new Uint8Array(h)].map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 48);
 }
 
@@ -98,13 +99,18 @@ export default {
     const url = new URL(req.url);
     const stub = env.STORE.get(env.STORE.idFromName('main'));
     if (url.pathname === '/setup') {
+      const t = botToken(env);
+      if (!t) return Response.json({ ok: false, problema: 'Il token non è arrivato al bot. Su Cloudflare: Impostazioni > Variabili e segreti > aggiungi un Segreto con nome TELEGRAM_BOT_TOKEN, poi Distribuisci.' }, { status: 500 });
+      if (!/^\d{5,}:[A-Za-z0-9_-]{30,}$/.test(t)) return Response.json({ ok: false, problema: `Il token c'è ma non ha il formato giusto (numeri, due punti, poi circa 35 caratteri). Lunghezza attuale: ${t.length} caratteri, contiene i due punti: ${t.includes(':') ? 'sì' : 'no'}. Ricopialo da BotFather.` }, { status: 500 });
+      const me = await tg(env, 'getMe', {});
+      if (!me.ok) return Response.json({ ok: false, problema: 'Telegram non riconosce questo token. Ricopialo da BotFather (oppure chiedine uno nuovo con /token) e aggiornalo su Cloudflare.' }, { status: 500 });
       const secret = await webhookSecret(env);
       const w = await tg(env, 'setWebhook', {
         url: url.origin + '/webhook', secret_token: secret,
         allowed_updates: ['message', 'callback_query'], drop_pending_updates: true
       });
       const c = await tg(env, 'setMyCommands', { commands: COMMANDS });
-      return Response.json({ webhook: w, commands: c }, { status: w.ok ? 200 : 500 });
+      return Response.json({ ok: !!w.ok, bot: '@' + me.result.username, webhook: w, commands: c, ...(w.ok ? { messaggio: 'Tutto pronto! Apri il bot su Telegram e scrivi /start.' } : {}) }, { status: w.ok ? 200 : 500 });
     }
     if (url.pathname === '/webhook' && req.method === 'POST') {
       if (req.headers.get('X-Telegram-Bot-Api-Secret-Token') !== await webhookSecret(env)) return new Response('forbidden', { status: 403 });
