@@ -325,9 +325,12 @@ export class Store {
         for (const m of c.meds) { const a = this.stockAlert(c, m); if (a) await this.send(chatId, a); }
         for (const m of c.meds) if (this.ended(m, n.date) && !m.endNotified) {
           m.endNotified = true;
-          await this.send(chatId, `🏁 <b>Terapia terminata</b>\n${esc(m.name)}${this.pp(c, m.person)}: l'ultimo giorno era ${fmtDate(m.end)}, non mando più promemoria.`,
-            { inline_keyboard: [[{ text: '🗑 Elimina il farmaco', callback_data: 'MD|' + m.id }, { text: '📆 Prolunga', callback_data: 'MT|' + m.id }]] });
+          await this.send(chatId, `🏁 <b>Terapia conclusa</b>\n${esc(m.name)}${m.dose ? ' ' + esc(m.dose) : ''}${this.pp(c, m.person)}: l'ultimo giorno era ${fmtDate(m.end)}. Non mando più promemoria; la trovi in /storico tra le terapie concluse.`,
+            { inline_keyboard: [[{ text: '📆 Prolunga', callback_data: 'MT|' + m.id }]] });
         }
+        // le terapie concluse da più di 90 giorni escono anche dallo storico
+        const old = addDays(n.date, -90).date;
+        if (c.meds.some(m => m.end && m.end < old)) c.meds = c.meds.filter(m => !(m.end && m.end < old));
       }
       // pulizia
       const keepSent = addDays(n.date, -1).date, keepLog = addDays(n.date, -90).date;
@@ -651,16 +654,41 @@ export class Store {
     return { text, kb: { inline_keyboard: kb } };
   }
   medsView(c) {
-    if (!c.meds.length) return { text: 'Non ci sono ancora farmaci. Usa /aggiungi per inserirne uno.' };
+    const today = romeParts().date;
+    const done = c.meds.filter(m => this.ended(m, today));
+    const doneBtn = done.length ? [[{ text: `🗂 Terapie concluse (${done.length})`, callback_data: 'MC' }]] : [];
+    const act = c.meds.filter(m => !this.ended(m, today));
+    if (!act.length) return { text: 'Non ci sono farmaci in corso. Usa /aggiungi per inserirne uno.', kb: doneBtn.length ? { inline_keyboard: doneBtn } : undefined };
     const order = id => c.persons.findIndex(p => p.id === id);
-    const ms = [...c.meds].sort((a, b) => order(a.person) - order(b.person) || a.name.localeCompare(b.name));
+    const ms = [...act].sort((a, b) => order(a.person) - order(b.person) || a.name.localeCompare(b.name));
     let text = '💊 <b>Farmaci</b>\n', last = null;
     for (const m of ms) {
       if (m.person !== last) { text += this.multi(c) ? `\n👤 <b>${esc(this.person(c, m.person))}</b>\n` : '\n'; last = m.person; }
       text += `• ${esc(m.name)}${m.dose ? ' ' + esc(m.dose) : ''} — ${m.times.join(', ')}${m.paused ? ' ⏸' : ''}\n`;
     }
     text += '\nTocca un farmaco per modificarlo:';
-    return { text, kb: { inline_keyboard: ms.map(m => [{ text: `${m.paused ? '⏸ ' : ''}${m.name}${this.pdot(c, m.person, true)}`.slice(0, 60), callback_data: 'MM|' + m.id }]) } };
+    return { text, kb: { inline_keyboard: [...ms.map(m => [{ text: `${m.paused ? '⏸ ' : ''}${m.name}${this.pdot(c, m.person, true)}`.slice(0, 60), callback_data: 'MM|' + m.id }]), ...doneBtn] } };
+  }
+  doneView(c) {
+    const today = romeParts().date;
+    const done = c.meds.filter(m => this.ended(m, today)).sort((a, b) => a.end < b.end ? 1 : -1);
+    if (!done.length) return { text: 'Nessuna terapia conclusa.', kb: { inline_keyboard: [[{ text: '⬅️ Elenco', callback_data: 'ML' }]] } };
+    return {
+      text: '🗂 <b>Terapie concluse</b>\nRestano nello storico per 90 giorni. Toccane una per prolungarla o eliminarla.',
+      kb: { inline_keyboard: [...done.map(m => [{ text: `${m.name} · fino al ${fmtDate(m.end)}`.slice(0, 60), callback_data: 'MM|' + m.id }]), [{ text: '⬅️ Elenco', callback_data: 'ML' }]] }
+    };
+  }
+  // dosi previste e prese per un farmaco tra due date (incluse)
+  countDoses(c, m, from, to) {
+    let n = 0, t = 0;
+    for (let d = from, i = 0; d <= to && i < 400; i++) {
+      const day = addDays(d, 0);
+      if (!(m.days.length && m.days.length < 7 && !m.days.includes(day.dow))) for (const tm of this.timesOn(m, d)) {
+        n++; const e = this.getLog(c, d, m.id + '@' + tm); if (e && e.s === 'taken') t++;
+      }
+      d = addDays(d, 1).date;
+    }
+    return { n, t };
   }
   planView(c, m) {
     const today = romeParts().date;
@@ -690,7 +718,7 @@ export class Store {
   stockView(c) {
     if (!c.meds.length) return 'Non ci sono ancora farmaci.';
     const daysLeft = m => (m.stock == null || !m.times.length || this.ended(m, romeParts().date)) ? Infinity : m.stock / this.perDay(m);
-    const sorted = [...c.meds].sort((a, b) => daysLeft(a) - daysLeft(b) || a.name.localeCompare(b.name));
+    const sorted = c.meds.filter(m => !this.ended(m, romeParts().date)).sort((a, b) => daysLeft(a) - daysLeft(b) || a.name.localeCompare(b.name));
     const lines = sorted.map(m => {
       if (m.stock == null) return `⚪ ${esc(m.name)}${this.pp(c, m.person)}: non conteggiate`;
       const left = m.stock / this.perDay(m), d = Math.floor(left);
@@ -716,10 +744,18 @@ export class Store {
       }
     }
     const rows = Object.values(per);
-    if (!rows.length) return '📊 Nessuna dose negli ultimi 7 giorni.';
     const bar = r => { const k = Math.round(r * 5); return '🟩'.repeat(k) + '⬜'.repeat(5 - k); };
-    let text = '📊 <b>Ultimi 7 giorni</b>\n\n' + rows.map(p => `${bar(p.t / p.n)} ${p.t}/${p.n}  ${this.multi(c) ? '<b>' + esc(this.person(c, p.m.person)) + '</b> · ' : ''}${esc(p.m.name)}`).join('\n');
+    let text = !rows.length ? '📊 Nessuna dose negli ultimi 7 giorni.' : '📊 <b>Ultimi 7 giorni</b>\n\n' + rows.map(p => `${bar(p.t / p.n)} ${p.t}/${p.n}  ${this.multi(c) ? '<b>' + esc(this.person(c, p.m.person)) + '</b> · ' : ''}${esc(p.m.name)}`).join('\n');
     if (miss.length) text += `\n\n<b>Non segnate:</b>\n${miss.join('\n')}`;
+    const done = c.meds.filter(m => this.ended(m, n.date)).sort((a, b) => a.end < b.end ? 1 : -1);
+    if (done.length) {
+      text += '\n\n🗂 <b>Terapie concluse</b>';
+      for (const m of done) {
+        const k = this.countDoses(c, m, m.start || m.end, m.end);
+        const short = dt => { const [, mm, dd] = dt.split('-').map(Number); return `${dd}/${mm}`; };
+        text += `\n• ${esc(m.name)}${m.dose ? ' ' + esc(m.dose) : ''}${this.pp(c, m.person)}: dal ${short(m.since || m.start)} al ${short(m.end)}${k.n ? ` — prese ${k.t} di ${k.n}` : ''}`;
+      }
+    }
     return text;
   }
 
@@ -830,6 +866,7 @@ export class Store {
     }
 
     // gestione farmaci
+    if (k === 'MC') { const v = this.doneView(c); await this.edit(chatId, mid, v.text, v.kb); return ans(); }
     if (k === 'ML') { const v = this.medsView(c); await this.edit(chatId, mid, v.text, v.kb); return ans(); }
     const m = c.meds.find(x => x.id === r[0]);
     if (['MM', 'MP', 'MS', 'MD', 'MDY', 'ME', 'MW', 'MWP', 'MWN', 'MT', 'MTC', 'MTE', 'MTX', 'MTS'].includes(k) && !m) { const v = this.medsView(c); await this.edit(chatId, mid, v.text, v.kb); return ans('Farmaco non trovato'); }
