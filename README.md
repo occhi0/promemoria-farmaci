@@ -28,19 +28,17 @@ Il sito è servito con GitHub Pages dal file `index.html` sul branch `main`.
 
 # Bot Telegram
 
-La cartella `bot/` contiene un bot Telegram che manda i promemoria **anche con il telefono bloccato**, con i pulsanti ✅ Preso, ⏰ 10 min e ⏭ Salta. Gira gratis su Cloudflare Workers e viene pubblicato in automatico da GitHub Actions a ogni modifica.
+La cartella `bot/` contiene un bot Telegram che manda i promemoria **anche con il telefono bloccato**, con i pulsanti ✅ Preso, ⏰ 10 min e ⏭ Salta. Gira gratis su Cloudflare Workers, che lo ripubblica in automatico a ogni modifica del repository.
 
 ## Configurazione (una volta sola)
 
-1. **Crea il bot**: in Telegram scrivi a `@BotFather`, invia `/newbot`, scegli un nome e un username che finisca in `bot`. Copia il **token** che ti dà.
-2. **Cloudflare**: crea un account gratuito su cloudflare.com e apri una volta **Workers & Pages** (serve ad attivare il sottodominio `workers.dev`).
-   - Copia l'**Account ID** (pagina Workers & Pages o pagina iniziale dell'account).
-   - Crea un **API token**: Profilo → API Tokens → Create Token → modello **"Edit Cloudflare Workers"**.
-3. **GitHub**: nel repository vai su Settings → Secrets and variables → Actions → New repository secret e crea:
-   - `TELEGRAM_BOT_TOKEN`
-   - `CLOUDFLARE_API_TOKEN`
-   - `CLOUDFLARE_ACCOUNT_ID`
-4. Vai su **Actions → Pubblica bot Telegram → Run workflow**.
+1. **Crea il bot**: in Telegram scrivi a `@BotFather`, invia `/newbot`, scegli un nome e un username che finisca in `bot`. Copia il **token**.
+2. **Collega il repository a Cloudflare**: crea un account gratuito su cloudflare.com, poi vai su **Workers & Pages → Create → Import a repository**, collega GitHub e scegli `promemoria-farmaci`.
+   - Nome del progetto: `promemoria-farmaci-bot`
+   - **Root directory** (in *Advanced settings*): `bot`
+   - Lascia il resto com'è e premi **Deploy**.
+3. **Inserisci il token**: nel worker appena creato vai su **Settings → Variables and Secrets → Add**, tipo **Secret**, nome `TELEGRAM_BOT_TOKEN`, valore il token del punto 1, poi **Deploy**.
+4. **Collega Telegram**: apri nel browser `https://promemoria-farmaci-bot.<tuo-sottodominio>.workers.dev/setup` (l'indirizzo esatto è nella pagina del worker). Deve comparire `"ok":true`.
 5. Scrivi `/start` al tuo bot: chi lo fa per primo diventa amministratore e approva gli altri familiari.
 
 ## Comandi
