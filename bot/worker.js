@@ -165,6 +165,7 @@ export default {
         allowed_updates: ['message', 'callback_query'], drop_pending_updates: true
       });
       const c = await tg(env, 'setMyCommands', { commands: COMMANDS });
+      await stub.fetch('https://store/cmds', { method: 'POST' });
       return Response.json({ ok: !!w.ok, bot: '@' + me.result.username, webhook: w, commands: c, ...(w.ok ? { messaggio: 'Tutto pronto! Apri il bot su Telegram e scrivi /start.' } : {}) }, { status: w.ok ? 200 : 500 });
     }
     if (url.pathname === '/webhook' && req.method === 'POST') {
@@ -195,6 +196,7 @@ export class Store {
     try {
       if (path === '/tick') { const t = await req.text(); await this.tick(t ? Number(t) : Date.now()); }
       else if (path === '/update') await this.onUpdate(await req.json());
+      else if (path === '/cmds') { const a = await this.acl(); if (a.admin) await this.syncCommands(a); }
     } catch (e) { console.log('errore', e && e.stack || e); }
     return new Response('ok');
   }
@@ -292,6 +294,14 @@ export class Store {
     return { inline_keyboard: [[{ text: '✅ Preso', callback_data: 'T|' + d }], [{ text: `⏰ ${SNOOZE_MIN} min`, callback_data: 'Z|' + d }, { text: '⏭ Salta', callback_data: 'S|' + d }]] };
   }
 
+  // Menu dei comandi: completo in chat privata e nei gruppi principali, nessuno nei gruppi semplici.
+  async syncCommands(acl) {
+    await tg(this.env, 'deleteMyCommands', {});
+    await tg(this.env, 'setMyCommands', { commands: COMMANDS, scope: { type: 'all_private_chats' } });
+    for (const id of Object.keys(acl.chats)) if (id.startsWith('-')) await tg(this.env, 'setMyCommands', { commands: COMMANDS, scope: { type: 'chat', chat_id: Number(id) } });
+    for (const id of Object.keys(acl.mirrors || {})) await tg(this.env, 'deleteMyCommands', { scope: { type: 'chat', chat_id: Number(id) } });
+    acl.cmdv = 5; await this.saveAcl(acl);
+  }
   mirrorsOf(acl, src) { return Object.keys(acl.mirrors || {}).filter(k => acl.mirrors[k] === src); }
   // aggiorna tutte le copie del promemoria (gruppo principale e gruppo semplice), tranne quella già modificata
   async syncCopies(c, srcId, date, key, exceptChat, exceptMid, text, kb, skip) {
@@ -344,6 +354,7 @@ export class Store {
   async tick(nowTs) {
     const n = romeParts(nowTs);
     const acl = await this.acl();
+    if (acl.admin && acl.cmdv !== 5) await this.syncCommands(acl);
     for (const chatId of Object.keys(acl.chats)) {
       const c = await this.chat(chatId);
       let changed = false;
@@ -427,7 +438,7 @@ export class Store {
         acl.mcv = acl.mcv || {}; acl.mcv[chatId] = 4; await this.saveAcl(acl);
         const rk = await this.send(chatId, '…', { remove_keyboard: true });   // toglie i vecchi pulsanti fissi
         if (rk.ok) await this.del(chatId, rk.result.message_id);
-        await tg(this.env, 'setMyCommands', { commands: [{ command: 'oggi', description: 'Dosi di oggi' }, { command: 'terapia', description: 'Elenco della terapia per il medico' }], scope: { type: 'chat', chat_id: Number(chatId) } });
+        await tg(this.env, 'deleteMyCommands', { scope: { type: 'chat', chat_id: Number(chatId) } });
       }
       if (cmd === '/oggi') return this.updatePanel(acl, chatId, await this.chat(src), true);
       if (cmd === '/terapia') return this.mirrorTherapy(acl, chatId, await this.chat(src), acl.chats[src]);
@@ -450,6 +461,7 @@ export class Store {
     if (!acl.chats[chatId]) {
       if (priv || uid !== acl.admin || !cmd) { if (priv) await this.send(chatId, 'Questo è un bot privato.'); return; }
       acl.chats[chatId] = msg.chat.title || 'Gruppo'; await this.saveAcl(acl);
+      await tg(this.env, 'setMyCommands', { commands: COMMANDS, scope: { type: 'chat', chat_id: Number(chatId) } });
       await this.send(chatId, `👋 Gruppo <b>${esc(msg.chat.title || '')}</b> collegato!\n\nQui chiunque del gruppo può aggiungere farmaci, segnare le dosi e vedere lo storico. I promemoria dei farmaci inseriti qui arriveranno nel gruppo.\n\nPer spostare qui farmaci già inseriti nella tua chat privata: /trasferisci`);
       if (cmd === '/start') return;
     }
@@ -944,7 +956,7 @@ export class Store {
       acl.mirrors = acl.mirrors || {}; acl.mirrors[chatId] = src; delete acl.chats[chatId];
       await this.saveAcl(acl);
       acl.mcv = acl.mcv || {}; acl.mcv[chatId] = 4; await this.saveAcl(acl);
-      await tg(this.env, 'setMyCommands', { commands: [{ command: 'oggi', description: 'Dosi di oggi' }, { command: 'terapia', description: 'Elenco della terapia per il medico' }], scope: { type: 'chat', chat_id: Number(chatId) } });
+      await tg(this.env, 'deleteMyCommands', { scope: { type: 'chat', chat_id: Number(chatId) } });
       await this.del(chatId, mid);
       const sc = await this.chat(src);
       await this.mirrorTherapy(acl, chatId, sc, acl.chats[src]);
