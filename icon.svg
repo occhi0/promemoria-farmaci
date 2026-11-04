@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2a7560"/>
+      <stop offset="1" stop-color="#174536"/>
+    </linearGradient>
+    <clipPath id="cap"><rect x="-135" y="-62" width="270" height="124" rx="62"/></clipPath>
+  </defs>
+  <rect width="512" height="512" fill="url(#bg)"/>
+  <!-- capsula -->
+  <g transform="translate(250 268) rotate(-35)">
+    <g clip-path="url(#cap)">
+      <rect x="-135" y="-62" width="135" height="124" fill="#f5f2ec"/>
+      <rect x="0" y="-62" width="135" height="124" fill="#8fd3b4"/>
+      <rect x="-135" y="-62" width="270" height="34" fill="#fff" opacity=".22"/>
+    </g>
+    <rect x="-135" y="-62" width="270" height="124" rx="62" fill="none" stroke="#123a2d" stroke-opacity=".25" stroke-width="4"/>
+  </g>
+  <!-- orologio -->
+  <g transform="translate(350 170)">
+    <circle r="74" fill="#174536"/>
+    <circle r="62" fill="#f5f2ec"/>
+    <path d="M0 -36 V0 L26 16" fill="none" stroke="#1f5c4a" stroke-width="13" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle r="7" fill="#1f5c4a"/>
+  </g>
+</svg>
