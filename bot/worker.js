@@ -858,28 +858,20 @@ export class Store {
   historyView(c) {
     const n = romeParts();
     if (!c.meds.length) return 'Non ci sono ancora farmaci.';
-    // Farmaci salvavita: conta sapere quale dose manca, non la percentuale.
-    let total = 0; const miss = [], skip = [];
+    // Elenco semplice: per ogni farmaco quante dosi prese su quelle previste.
+    const per = {};
     for (let i = 0; i < 7; i++) {
       const day = addDays(n.date, -i);
       for (const d of this.dosesOn(c, day.date, day.dow)) {
         if (i === 0 && toMin(d.time) > n.min) continue;
-        total++;
         const e = this.getLog(c, day.date, d.key);
-        const line = `${i === 0 ? 'oggi' : i === 1 ? 'ieri' : fmtDate(day.date)} ${d.time} · <b>${esc(d.m.name)}</b>${this.pp(c, d.m.person)}`;
-        if (!e) miss.push(line);
-        else if (e.s === 'skipped') skip.push(line + (e.by ? ` (${esc(e.by)})` : ''));
+        const p = per[d.m.id] = per[d.m.id] || { m: d.m, t: 0, n: 0 };
+        p.n++; if (e && e.s === 'taken') p.t++;
       }
     }
-    let text = '📊 <b>Ultimi 7 giorni</b>\n\n';
-    if (!total) text += 'Nessuna dose prevista finora.';
-    else if (!miss.length && !skip.length) text += `✅ Tutte le dosi sono state prese (${total}).`;
-    else {
-      if (miss.length) text += `❗ <b>Non segnate (${miss.length})</b>\n${miss.slice(0, 20).join('\n')}${miss.length > 20 ? `\n… e altre ${miss.length - 20}` : ''}\n\n`;
-      if (skip.length) text += `⏭ <b>Saltate (${skip.length})</b>\n${skip.slice(0, 20).join('\n')}\n\n`;
-      text += `✅ Prese: ${total - miss.length - skip.length} di ${total}`;
-      if (miss.length) text += `\n\nSe una dose "non segnata" in realtà è stata data, segnala con ✅ dal suo promemoria (o da /oggi, per quelle di oggi).`;
-    }
+    const rows = Object.values(per).sort((a, b) => a.m.name.localeCompare(b.m.name, 'it', { sensitivity: 'base' }) || ((a.m.since || a.m.start || '') < (b.m.since || b.m.start || '') ? -1 : 1));
+    let text = '📊 <b>Ultimi 7 giorni</b>\n';
+    text += !rows.length ? '\nNessuna dose prevista finora.' : '\n' + rows.map(p => `${p.t === p.n ? '✅' : '❗'} <b>${esc(p.m.name)}</b>${this.pp(c, p.m.person)}: ${p.t} su ${p.n}`).join('\n');
     const done = c.meds.filter(m => this.ended(m, n.date)).sort((a, b) => a.end < b.end ? 1 : -1);
     if (done.length) {
       text += '\n\n🗂 <b>Terapie concluse</b>';
