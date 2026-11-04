@@ -79,7 +79,7 @@ All'orario di ogni dose ti mando un messaggio con i pulsanti ✅ Preso, ⏰ ${SN
 
 /aggiungi – aggiungi un farmaco
 /oggi – le dosi di oggi
-/farmaci – elenco, pausa, scorte, elimina
+/farmaci – elenco, modifica, pausa, scorte, elimina
 /scorte – compresse rimaste
 /storico – ultimi 7 giorni
 /annulla – interrompi l'operazione in corso
@@ -342,6 +342,20 @@ export class Store {
         c.meds.push(m); delete c.flows[uid]; await save();
         return this.send(chatId, `✅ Salvato!\n\n${this.medText(c, m)}\n\nTi avviserò a ogni orario.`, { remove_keyboard: true, selective: true });
       }
+      case 'edit': {
+        const m = c.meds.find(x => x.id === d.med);
+        if (!m) { delete c.flows[uid]; await save(); return this.send(chatId, 'Il farmaco non esiste più.'); }
+        if (d.field === 'name') m.name = text.slice(0, 60);
+        else if (d.field === 'dose') m.dose = isSkip(text) ? '' : text.slice(0, 40);
+        else if (d.field === 'times') {
+          const t = parseTimes(text);
+          if (!t) return this.ask(chatId, 'Non ho capito gli orari 🤔 Riprova, ad esempio <code>8 20</code> oppure <code>07:30 19:30</code>.', mid, 'Es. 8 20');
+          m.times = t;
+        }
+        delete c.flows[uid]; await save();
+        const v = this.medDetail(c, m);
+        return this.send(chatId, '✅ Modificato!\n\n' + v.text, v.kb);
+      }
       case 'restock': {
         const st = firstNum(text);
         const m = c.meds.find(x => x.id === d.med);
@@ -397,6 +411,7 @@ export class Store {
     return {
       text: this.medText(c, m), kb: {
         inline_keyboard: [
+          [{ text: '✏️ Nome', callback_data: 'ME|' + m.id + '|name' }, { text: '✏️ Dosaggio', callback_data: 'ME|' + m.id + '|dose' }, { text: '🕐 Orari', callback_data: 'ME|' + m.id + '|times' }],
           [{ text: m.paused ? '▶️ Riprendi' : '⏸ Metti in pausa', callback_data: 'MP|' + m.id }, { text: '📦 Scorte', callback_data: 'MS|' + m.id }],
           [{ text: '🗑 Elimina', callback_data: 'MD|' + m.id }, { text: '⬅️ Elenco', callback_data: 'ML' }]
         ]
@@ -517,9 +532,21 @@ export class Store {
     // gestione farmaci
     if (k === 'ML') { const v = this.medsView(c); await this.edit(chatId, mid, v.text, v.kb); return ans(); }
     const m = c.meds.find(x => x.id === r[0]);
-    if (['MM', 'MP', 'MS', 'MD', 'MDY'].includes(k) && !m) { const v = this.medsView(c); await this.edit(chatId, mid, v.text, v.kb); return ans('Farmaco non trovato'); }
+    if (['MM', 'MP', 'MS', 'MD', 'MDY', 'ME'].includes(k) && !m) { const v = this.medsView(c); await this.edit(chatId, mid, v.text, v.kb); return ans('Farmaco non trovato'); }
     if (k === 'MM') { const v = this.medDetail(c, m); await this.edit(chatId, mid, v.text, v.kb); return ans(); }
     if (k === 'MP') { m.paused = !m.paused; await this.saveChat(chatId, c); const v = this.medDetail(c, m); await this.edit(chatId, mid, v.text, v.kb); return ans(m.paused ? 'In pausa: niente promemoria' : 'Promemoria riattivati'); }
+    if (k === 'ME') {
+      const field = r[1];
+      if (!['name', 'dose', 'times'].includes(field)) return ans();
+      c.flows[uid] = { step: 'edit', d: { med: m.id, field } }; await this.saveChat(chatId, c);
+      const q = {
+        name: [`Nuovo nome per <b>${esc(m.name)}</b>?`, 'Nome del farmaco'],
+        dose: [`Nuovo dosaggio per <b>${esc(m.name)}</b>?${m.dose ? ` (ora: ${esc(m.dose)})` : ''}\nScrivi <b>salta</b> per toglierlo.`, 'Es. 400 mg'],
+        times: [`Nuovi orari per <b>${esc(m.name)}</b>? (ora: ${m.times.join(', ')})\nScrivili tutti, ad esempio <code>8 13 18 23</code>.`, 'Es. 8 20']
+      }[field];
+      await this.ask(chatId, q[0], null, q[1]);
+      return ans();
+    }
     if (k === 'MS') {
       c.flows[uid] = { step: 'restock', d: { med: m.id } }; await this.saveChat(chatId, c);
       await this.ask(chatId, `Quante unità di <b>${esc(m.name)}</b> hai adesso?${m.stock != null ? ` (ora: ${m.stock})` : ''}\nScrivi <b>-</b> per non contarle.`, null, 'Es. 30');
