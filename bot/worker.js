@@ -55,6 +55,8 @@ function parseDays(s) {
   }
   return out.size ? [...out].sort() : null;
 }
+const isSkip = s => /^(-|–|—|salta|saltare|per saltare|skip|no|niente|nessuno|non so|boh)$/i.test(s.trim().replace(/[.!]+$/, ''));
+const firstNum = s => { const m = s.match(/\d+/); return m ? parseInt(m[0], 10) : NaN; };
 const daysText = days => (!days.length || days.length === 7) ? 'tutti i giorni' : [1, 2, 3, 4, 5, 6, 0].filter(d => days.includes(d)).map(d => DOW_SHORT[d]).join(', ');
 
 const botToken = env => String(env.TELEGRAM_BOT_TOKEN || '').trim().replace(/^bot/i, '').replace(/\s+/g, '');
@@ -314,9 +316,9 @@ export class Store {
       }
       case 'name':
         d.name = text.slice(0, 60); fl.step = 'dose'; await save();
-        return this.ask(chatId, 'Dosaggio? Ad esempio <i>5 mg</i> o <i>1 compressa</i>.\nScrivi <b>-</b> per saltare.', mid, 'Es. 5 mg');
+        return this.ask(chatId, 'Dosaggio? Ad esempio <i>5 mg</i> o <i>1 compressa</i>.\nOppure scrivi <b>salta</b>.', mid, 'Es. 5 mg');
       case 'dose':
-        d.dose = text === '-' ? '' : text.slice(0, 40); fl.step = 'times'; await save();
+        d.dose = isSkip(text) ? '' : text.slice(0, 40); fl.step = 'times'; await save();
         return this.ask(chatId, 'A che ore va preso? Scrivi uno o più orari, ad esempio:\n<code>8 20</code> oppure <code>08:00 13:30 21:00</code>', mid, 'Es. 8 13 20');
       case 'times': {
         const t = parseTimes(text);
@@ -334,17 +336,17 @@ export class Store {
       }
       case 'stock': {
         let st = null;
-        if (text !== '-') { st = parseInt(text, 10); if (isNaN(st) || st < 0) return this.ask(chatId, 'Scrivi un numero (ad esempio <code>28</code>) oppure <b>-</b> per saltare.', mid, 'Es. 28'); }
+        if (!isSkip(text)) { st = firstNum(text); if (isNaN(st) || st < 0) return this.ask(chatId, 'Scrivi solo il numero di compresse che hai, ad esempio <code>28</code>. Per saltare, scrivi <b>-</b> oppure <b>salta</b>.', mid, 'Es. 28'); }
         const today = romeParts().date;
         const m = { id: rid(), person: d.person, name: d.name, dose: d.dose || '', times: d.times, days: d.days || [], qty: 1, stock: st, start: today, paused: false, lowWarned: false };
         c.meds.push(m); delete c.flows[uid]; await save();
         return this.send(chatId, `✅ Salvato!\n\n${this.medText(c, m)}\n\nTi avviserò a ogni orario.`, { remove_keyboard: true, selective: true });
       }
       case 'restock': {
-        const st = parseInt(text, 10);
+        const st = firstNum(text);
         const m = c.meds.find(x => x.id === d.med);
         if (!m) { delete c.flows[uid]; await save(); return this.send(chatId, 'Il farmaco non esiste più.'); }
-        if (text === '-') { m.stock = null; }
+        if (isSkip(text)) { m.stock = null; }
         else if (isNaN(st) || st < 0) return this.ask(chatId, 'Scrivi un numero, ad esempio <code>30</code> (oppure <b>-</b> per non contare le scorte).', mid, 'Es. 30');
         else m.stock = st;
         m.lowWarned = false; delete c.flows[uid]; await save();
@@ -353,7 +355,7 @@ export class Store {
     }
   }
   askStock(chatId, mid) {
-    return this.ask(chatId, 'Quante compresse (o unità) hai adesso? Le scalo a ogni dose e ti avviso quando stanno per finire.\nScrivi <b>-</b> per saltare.', mid, 'Es. 28');
+    return this.ask(chatId, 'Quante compresse (o unità) hai adesso? Le scalo a ogni dose e ti avviso quando stanno per finire.\nScrivi solo il numero (es. <code>50</code>), oppure <b>salta</b>.', mid, 'Es. 28');
   }
 
   /* ---------- viste ---------- */
