@@ -606,7 +606,7 @@ export class Store {
     let t = `🩺 <b>Terapia in corso</b>${persons.length === 1 ? ' — ' + esc(this.person(c, persons[0])) : ''}\nAggiornata al ${dateLong}\n`;
     for (const pid of persons) {
       if (persons.length > 1) t += `\n<b>${esc(this.person(c, pid))}</b>`;
-      const ms = active.filter(m => m.person === pid).sort((a, b) => a.name.localeCompare(b.name));
+      const ms = active.filter(m => m.person === pid).sort((a, b) => a.name.localeCompare(b.name, 'it', { sensitivity: 'base' }) || ((a.since || a.start || '') < (b.since || b.start || '') ? -1 : (a.since || a.start || '') > (b.since || b.start || '') ? 1 : 0));
       const short = dt => { const [, mm, dd] = dt.split('-').map(Number); return `${dd}/${mm}`; };
       const dal = dt => (/^(8|11)\//.test(short(dt)) ? "dall'" : 'dal ') + short(dt);
       const al = dt => (/^(8|11)\//.test(short(dt)) ? "all'" : 'al ') + short(dt);
