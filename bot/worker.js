@@ -557,7 +557,12 @@ export class Store {
       const ms = c.meds.filter(m => m.person === p.id);
       if (!ms.length) continue;
       t += `\n👤 <b>${esc(p.name)}</b>\n`;
-      for (const m of ms) t += `• ${esc(m.name)}${m.dose ? ' ' + esc(m.dose) : ''} — ${m.times.join(', ')}, ${daysText(m.days)}${m.stock != null ? `, scorte ${m.stock}` : ''}${m.paused ? ' (in pausa)' : ''}\n`;
+      for (const m of ms) {
+        t += `• ${esc(m.name)}${m.dose ? ' ' + esc(m.dose) : ''} — ${m.times.join(', ')}, ${daysText(m.days)}${m.stock != null ? `, scorte ${m.stock}` : ''}${m.paused ? ' (in pausa)' : ''}\n`;
+        for (const p of [...(m.plan || [])].sort((a, b) => a.from < b.from ? -1 : 1)) t += `   🔁 dal ${fmtDate(p.from)}: ${p.times.join(', ')}\n`;
+        t += m.end ? `   📆 dal ${fmtDate(m.start)} al ${fmtDate(m.end)}\n` : '';
+        if (m.notes) t += `   📝 ${esc(m.notes)}\n`;
+      }
     }
     return t + '\nConserva questo messaggio (ad esempio inoltralo ai Messaggi salvati): se un giorno dovessi reinserire i farmaci, qui trovi tutto.';
   }
