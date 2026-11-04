@@ -193,6 +193,7 @@ export class Store {
   }
   async handle(req) {
     const path = new URL(req.url).pathname;
+    this._acl = null;   // un solo oggetto acl per richiesta (così le migrazioni non vengono sovrascritte)
     try {
       if (path === '/tick') { const t = await req.text(); await this.tick(t ? Number(t) : Date.now()); }
       else if (path === '/update') await this.onUpdate(await req.json());
@@ -202,7 +203,10 @@ export class Store {
   }
 
   /* ---------- archivio ---------- */
-  async acl() { return (await this.state.storage.get('acl')) || { admin: null, chats: {} }; }
+  async acl() {
+    if (!this._acl) this._acl = (await this.state.storage.get('acl')) || { admin: null, chats: {} };
+    return this._acl;
+  }
   saveAcl(a) { return this.state.storage.put('acl', a); }
   async chat(id) {
     const c = (await this.state.storage.get('c:' + id)) || {};
@@ -211,8 +215,28 @@ export class Store {
   saveChat(id, c) { return this.state.storage.put('c:' + id, c); }
 
   /* ---------- Telegram ---------- */
-  send(chatId, text, markup, extra = {}) {
-    return tg(this.env, 'sendMessage', { chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true, ...(markup ? { reply_markup: markup } : {}), ...extra });
+  // Un gruppo normale diventato "supergruppo" cambia id: aggiorniamo tutti i riferimenti.
+  async migrateChat(oldId, newId) {
+    oldId = String(oldId); newId = String(newId);
+    if (oldId === newId) return;
+    const acl = await this.acl();
+    let touched = false;
+    if (acl.chats[oldId] !== undefined) { acl.chats[newId] = acl.chats[oldId]; delete acl.chats[oldId]; touched = true;
+      const c = await this.state.storage.get('c:' + oldId); if (c) { await this.state.storage.put('c:' + newId, c); await this.state.storage.delete('c:' + oldId); } }
+    acl.mirrors = acl.mirrors || {};
+    if (acl.mirrors[oldId] !== undefined) { acl.mirrors[newId] = acl.mirrors[oldId]; delete acl.mirrors[oldId]; touched = true; }
+    for (const k of Object.keys(acl.mirrors)) if (acl.mirrors[k] === oldId) { acl.mirrors[k] = newId; touched = true; }
+    for (const bag of ['panels', 'mcv']) if (acl[bag] && acl[bag][oldId] !== undefined) { acl[bag][newId] = acl[bag][oldId]; delete acl[bag][oldId]; touched = true; }
+    if (acl.panels && acl.panels[newId]) { delete acl.panels[newId].oggi; delete acl.panels[newId].terapia; delete acl.panels[newId].pinned; }  // i vecchi messaggi non sono più modificabili
+    if (touched) { acl.cmdv = 0; await this.saveAcl(acl); console.log('migrato', oldId, '→', newId); }
+  }
+  async send(chatId, text, markup, extra = {}) {
+    const body = { chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true, ...(markup ? { reply_markup: markup } : {}), ...extra };
+    let r = await tg(this.env, 'sendMessage', body);
+    const nid = r && !r.ok && r.parameters && r.parameters.migrate_to_chat_id;
+    if (nid) { await this.migrateChat(chatId, nid); r = await tg(this.env, 'sendMessage', { ...body, chat_id: nid }); }
+    if (r) r._chat = String(nid || chatId);
+    return r;
   }
   edit(chatId, mid, text, markup) {
     return tg(this.env, 'editMessageText', { chat_id: chatId, message_id: mid, text, parse_mode: 'HTML', reply_markup: markup || { inline_keyboard: [] } });
@@ -337,7 +361,7 @@ export class Store {
     const r = await this.send(mc, v.text, v.kb);
     if (r.ok) {
       P.oggi = r.result.message_id; P.day = romeParts().date;
-      const pr = await tg(this.env, 'pinChatMessage', { chat_id: mc, message_id: P.oggi, disable_notification: true });
+      const pr = await tg(this.env, 'pinChatMessage', { chat_id: r._chat || mc, message_id: P.oggi, disable_notification: true });
       P.pinned = !!pr.ok; await this.saveAcl(acl);
     }
   }
@@ -423,6 +447,8 @@ export class Store {
   async onUpdate(up) {
     if (up.callback_query) return this.onCallback(up.callback_query);
     const msg = up.message;
+    if (msg && msg.migrate_to_chat_id) return this.migrateChat(msg.chat.id, msg.migrate_to_chat_id);
+    if (msg && msg.migrate_from_chat_id) return this.migrateChat(msg.migrate_from_chat_id, msg.chat.id);
     if (!msg || !msg.from || msg.from.is_bot) return;
     const chatId = String(msg.chat.id), uid = String(msg.from.id), name = msg.from.first_name || 'Utente';
     const priv = msg.chat.type === 'private';
