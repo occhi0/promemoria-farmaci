@@ -598,9 +598,12 @@ export class Store {
       const short = dt => { const [, mm, dd] = dt.split('-').map(Number); return `${dd}/${mm}`; };
       const dal = dt => (/^(8|11)\//.test(short(dt)) ? "dall'" : 'dal ') + short(dt);
       const al = dt => (/^(8|11)\//.test(short(dt)) ? "all'" : 'al ') + short(dt);
-      const freq2 = (m, k) => (m.days.length && m.days.length < 7)
-        ? (k * m.days.length === 1 ? '1 volta a settimana' : `${k * m.days.length} volte a settimana`)
-        : freq(k);
+      // Settimanale solo se il farmaco è in un solo giorno della settimana; altrimenti "N volte al giorno (lun, mer, ven)".
+      const freq2 = (m, k) => {
+        if (!(m.days.length && m.days.length < 7)) return freq(k);
+        if (m.days.length === 1) return k === 1 ? '1 volta a settimana' : `${k} volte al giorno, 1 giorno a settimana`;
+        return `${freq(k)} (${daysText(m.days)})`;
+      };
       for (const m of ms) {
         const phases = [{ from: m.since || m.start || n.date, times: m.times }, ...[...(m.plan || [])].sort((a, b) => a.from < b.from ? -1 : 1)];
         let line;
