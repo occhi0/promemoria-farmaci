@@ -81,7 +81,7 @@ All'orario di ogni dose ti mando un messaggio con i pulsanti ✅ Preso, ⏰ ${SN
 /storico – ultimi 7 giorni
 /annulla – interrompi l'operazione in corso
 
-Puoi anche aggiungermi al gruppo di famiglia: i promemoria arriveranno lì a tutti. Ogni chat ha il suo elenco di farmaci.`;
+Puoi gestire anche i farmaci dei familiari: quando aggiungi un farmaco scegli per chi è.`;
 
 const COMMANDS = [
   { command: 'oggi', description: 'Dosi di oggi' },
@@ -139,7 +139,7 @@ export class Store {
   }
 
   /* ---------- archivio ---------- */
-  async acl() { return (await this.state.storage.get('acl')) || { admin: null, users: {}, chats: {}, pending: {} }; }
+  async acl() { return (await this.state.storage.get('acl')) || { admin: null, chats: {} }; }
   saveAcl(a) { return this.state.storage.put('acl', a); }
   async chat(id) {
     const c = (await this.state.storage.get('c:' + id)) || {};
@@ -258,27 +258,14 @@ export class Store {
     const cmd = text.startsWith('/') ? text.split(/\s+/)[0].split('@')[0].toLowerCase() : null;
     const acl = await this.acl();
 
-    if (!acl.chats[chatId]) {
-      if (priv) {
-        if (!acl.admin && cmd === '/start') {
-          acl.admin = uid; acl.users[uid] = name; acl.chats[chatId] = name;
-          await this.saveAcl(acl);
-          return this.send(chatId, `Ciao ${esc(name)}! Sei l'amministratore: se altri familiari mi scrivono, ti chiederò di approvarli.\n\n${HELP}`);
-        }
-        if (acl.users[uid]) { acl.chats[chatId] = name; await this.saveAcl(acl); }
-        else {
-          if (!acl.pending[uid] && acl.admin) {
-            acl.pending[uid] = name; await this.saveAcl(acl);
-            await this.send(acl.admin, `🔔 <b>${esc(name)}</b>${msg.from.username ? ' (@' + esc(msg.from.username) + ')' : ''} chiede di usare il bot.`,
-              { inline_keyboard: [[{ text: '✅ Approva', callback_data: 'A|' + uid }, { text: '❌ Rifiuta', callback_data: 'R|' + uid }]] });
-          }
-          return this.send(chatId, "Ciao! Ho inviato la tua richiesta all'amministratore. Ti scrivo appena viene approvata.");
-        }
-      } else {
-        if (!(cmd && acl.users[uid])) return;
-        acl.chats[chatId] = msg.chat.title || 'Gruppo'; await this.saveAcl(acl);
-      }
+    // Bot personale: lo usa solo chi ha scritto /start per primo.
+    if (!acl.admin && priv && cmd === '/start') {
+      acl.admin = uid; acl.chats[chatId] = name;
+      await this.saveAcl(acl);
+      return this.send(chatId, `Ciao ${esc(name)}! Questo bot ora è solo tuo: nessun altro potrà usarlo.\n\n${HELP}`);
     }
+    if (uid !== acl.admin) { if (priv) await this.send(chatId, 'Questo è un bot privato.'); return; }
+    if (!acl.chats[chatId]) { acl.chats[chatId] = msg.chat.title || name; await this.saveAcl(acl); }
 
     const c = await this.chat(chatId);
     if (cmd) {
@@ -448,17 +435,7 @@ export class Store {
     const chatId = String(q.message.chat.id), mid = q.message.message_id, uid = String(q.from.id), who = q.from.first_name || '';
     const acl = await this.acl();
 
-    if (data.startsWith('A|') || data.startsWith('R|')) {
-      if (uid !== acl.admin) return ans("Solo l'amministratore può farlo");
-      const t = data.slice(2), nm = acl.pending[t] || 'Utente';
-      delete acl.pending[t];
-      if (data[0] === 'A') {
-        acl.users[t] = nm; acl.chats[t] = nm; await this.saveAcl(acl);
-        await this.edit(chatId, mid, `✅ ${esc(nm)} può usare il bot.`);
-        await this.send(t, `✅ Accesso approvato!\n\n${HELP}`);
-      } else { await this.saveAcl(acl); await this.edit(chatId, mid, `❌ Richiesta di ${esc(nm)} rifiutata.`); }
-      return ans();
-    }
+    if (uid !== acl.admin) return ans('Bot privato');
     if (!acl.chats[chatId]) return ans('Chat non autorizzata');
     const c = await this.chat(chatId);
     const [k, ...r] = data.split('|');

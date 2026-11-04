@@ -39,13 +39,13 @@ La cartella `bot/` contiene un bot Telegram che manda i promemoria **anche con i
    - Lascia il resto com'è e premi **Deploy**.
 3. **Inserisci il token**: nel worker appena creato vai su **Settings → Variables and Secrets → Add**, tipo **Secret**, nome `TELEGRAM_BOT_TOKEN`, valore il token del punto 1, poi **Deploy**.
 4. **Collega Telegram**: apri nel browser `https://promemoria-farmaci-bot.<tuo-sottodominio>.workers.dev/setup` (l'indirizzo esatto è nella pagina del worker). Deve comparire `"ok":true`.
-5. Scrivi `/start` al tuo bot: chi lo fa per primo diventa amministratore e approva gli altri familiari.
+5. Scrivi `/start` al tuo bot: da quel momento il bot è **solo tuo** e risponde soltanto a te.
 
 ## Comandi
 
 `/aggiungi` · `/oggi` · `/farmaci` · `/scorte` · `/storico` · `/annulla` · `/aiuto`
 
-Il bot si può aggiungere anche a un gruppo di famiglia: ogni chat ha il proprio elenco di farmaci.
+Puoi gestire anche i farmaci dei familiari: quando aggiungi un farmaco scegli per chi è.
 
 ## Privacy
 
