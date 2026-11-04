@@ -235,7 +235,12 @@ export class Store {
       if (m.start && date < m.start) continue;
       if (m.end && date > m.end) continue;
       if (m.days.length && m.days.length < 7 && !m.days.includes(dow)) continue;
-      for (const t of this.timesOn(m, date)) out.push({ m, time: t, key: m.id + '@' + t });
+      const arch = m.archived && date >= m.archived;
+      for (const t of this.timesOn(m, date)) {
+        const key = m.id + '@' + t;
+        if (arch && !this.getLog(c, date, key)) continue; // archiviato: niente più promemoria
+        out.push({ m, time: t, key });
+      }
     }
     return out.sort((a, b) => toMin(a.time) - toMin(b.time) || a.m.name.localeCompare(b.m.name));
   }
@@ -245,7 +250,7 @@ export class Store {
     for (const p of [...(m.plan || [])].sort((a, b) => a.from < b.from ? -1 : 1)) if (p.from <= date) t = p.times;
     return t;
   }
-  ended(m, date) { return !!(m.end && date > m.end); }
+  ended(m, date) { return !!((m.end && date > m.end) || (m.archived && date >= m.archived)); }
   getLog(c, date, key) { return (c.log[date] || {})[key]; }
   perDay(m) { return (m.qty || 1) * this.timesOn(m, romeParts().date).length * ((m.days.length && m.days.length < 7) ? m.days.length / 7 : 1); }
   logDose(c, date, key, m, s, who) {
@@ -530,7 +535,7 @@ export class Store {
           if (!e || e < today) return this.ask(chatId, 'Scrivi l\'ultimo giorno di terapia (es. <code>11/11</code>), oppure <b>-</b> per toglierlo (terapia cronica).', mid, 'Es. 11/11');
           m.end = e;
         }
-        delete m.endNotified;
+        delete m.endNotified; delete m.archived;
         delete c.flows[uid]; await save();
         const v = this.planView(c, m);
         return this.send(chatId, '✅ Fatto.\n\n' + v.text, v.kb);
@@ -675,7 +680,7 @@ export class Store {
     if (!done.length) return { text: 'Nessuna terapia conclusa.', kb: { inline_keyboard: [[{ text: '⬅️ Elenco', callback_data: 'ML' }]] } };
     return {
       text: '🗂 <b>Terapie concluse</b>\nRestano nello storico per 90 giorni. Toccane una per prolungarla o eliminarla.',
-      kb: { inline_keyboard: [...done.map(m => [{ text: `${m.name} · fino al ${fmtDate(m.end)}`.slice(0, 60), callback_data: 'MM|' + m.id }]), [{ text: '⬅️ Elenco', callback_data: 'ML' }]] }
+      kb: { inline_keyboard: [...done.map(m => [{ text: `${m.name}${m.dose ? ' ' + m.dose : ''} · ${m.archived ? 'archiviato il' : 'fino al'} ${fmtDate(m.archived || m.end)}`.slice(0, 60), callback_data: 'MM|' + m.id }]), [{ text: '⬅️ Elenco', callback_data: 'ML' }]] }
     };
   }
   // dosi previste e prese per un farmaco tra due date (incluse)
@@ -684,7 +689,9 @@ export class Store {
     for (let d = from, i = 0; d <= to && i < 400; i++) {
       const day = addDays(d, 0);
       if (!(m.days.length && m.days.length < 7 && !m.days.includes(day.dow))) for (const tm of this.timesOn(m, d)) {
-        n++; const e = this.getLog(c, d, m.id + '@' + tm); if (e && e.s === 'taken') t++;
+        const e = this.getLog(c, d, m.id + '@' + tm);
+        if (m.archived && d >= m.archived && !e) continue;
+        n++; if (e && e.s === 'taken') t++;
       }
       d = addDays(d, 1).date;
     }
@@ -710,7 +717,8 @@ export class Store {
         inline_keyboard: [
           [{ text: '✏️ Nome', callback_data: 'ME|' + m.id + '|name' }, { text: '✏️ Dosaggio', callback_data: 'ME|' + m.id + '|dose' }, { text: '🕐 Orari', callback_data: 'ME|' + m.id + '|times' }],
           [{ text: '👤 Persona', callback_data: 'MW|' + m.id }, { text: m.paused ? '▶️ Riprendi' : '⏸ Pausa', callback_data: 'MP|' + m.id }, { text: '📦 Scorte', callback_data: 'MS|' + m.id }],
-          [{ text: '📆 Programma', callback_data: 'MT|' + m.id }, { text: '🗑 Elimina', callback_data: 'MD|' + m.id }, { text: '⬅️ Elenco', callback_data: 'ML' }]
+          [{ text: '📆 Programma', callback_data: 'MT|' + m.id }, this.ended(m, romeParts().date) ? { text: '♻️ Riattiva', callback_data: 'MR|' + m.id } : { text: '🗂 Archivia', callback_data: 'MA|' + m.id }],
+          [{ text: '🗑 Elimina', callback_data: 'MD|' + m.id }, { text: '⬅️ Elenco', callback_data: 'ML' }]
         ]
       }
     };
@@ -869,7 +877,7 @@ export class Store {
     if (k === 'MC') { const v = this.doneView(c); await this.edit(chatId, mid, v.text, v.kb); return ans(); }
     if (k === 'ML') { const v = this.medsView(c); await this.edit(chatId, mid, v.text, v.kb); return ans(); }
     const m = c.meds.find(x => x.id === r[0]);
-    if (['MM', 'MP', 'MS', 'MD', 'MDY', 'ME', 'MW', 'MWP', 'MWN', 'MT', 'MTC', 'MTE', 'MTX', 'MTS'].includes(k) && !m) { const v = this.medsView(c); await this.edit(chatId, mid, v.text, v.kb); return ans('Farmaco non trovato'); }
+    if (['MM', 'MP', 'MS', 'MD', 'MDY', 'ME', 'MW', 'MWP', 'MWN', 'MT', 'MTC', 'MTE', 'MTX', 'MTS', 'MA', 'MAY', 'MR'].includes(k) && !m) { const v = this.medsView(c); await this.edit(chatId, mid, v.text, v.kb); return ans('Farmaco non trovato'); }
     if (k === 'MM') { const v = this.medDetail(c, m); await this.edit(chatId, mid, v.text, v.kb); return ans(); }
     if (k === 'MP') { m.paused = !m.paused; await this.saveChat(chatId, c); const v = this.medDetail(c, m); await this.edit(chatId, mid, v.text, v.kb); return ans(m.paused ? 'In pausa: niente promemoria' : 'Promemoria riattivati'); }
     if (k === 'MT') { const v = this.planView(c, m); await this.edit(chatId, mid, v.text, v.kb); return ans(); }
@@ -883,13 +891,34 @@ export class Store {
       await this.ask(chatId, `Qual è l'ultimo giorno di terapia di <b>${esc(m.name)}</b>?${m.end ? ` (ora: ${fmtDate(m.end)})` : ''}\nScrivi una data (es. <code>11/11</code>), oppure <b>-</b> se è cronica.`, null, 'Es. 11/11');
       return ans();
     }
+    if (k === 'MA') {
+      await this.edit(chatId, mid, `Archiviare <b>${esc(m.name)}</b>${m.dose ? ' ' + esc(m.dose) : ''}?\nNon riceverai più promemoria; resterà nello storico tra le terapie concluse.`,
+        { inline_keyboard: [[{ text: '🗂 Sì, archivia', callback_data: 'MAY|' + m.id }, { text: 'No', callback_data: 'MM|' + m.id }]] });
+      return ans();
+    }
+    if (k === 'MAY') {
+      const today = romeParts().date;
+      m.archived = today; m.end = (m.end && m.end < today) ? m.end : today; m.endNotified = true;
+      c.snooze = c.snooze.filter(x => x.medId !== m.id);
+      await this.saveChat(chatId, c);
+      const v = this.medsView(c);
+      await this.edit(chatId, mid, `🗂 ${esc(m.name)} archiviato: lo trovi in /storico e in /farmaci → Terapie concluse.\n\n` + v.text, v.kb);
+      return ans('Archiviato');
+    }
+    if (k === 'MR') {
+      delete m.archived; m.end = ''; delete m.endNotified;
+      await this.saveChat(chatId, c);
+      const v = this.medDetail(c, m);
+      await this.edit(chatId, mid, '♻️ Riattivato: i promemoria ripartono.\n\n' + v.text, v.kb);
+      return ans('Riattivato');
+    }
     if (k === 'MTS') {
       c.flows[uid] = { step: 'psince', d: { med: m.id } }; await this.saveChat(chatId, c);
       await this.ask(chatId, `Quando è iniziata la terapia con <b>${esc(m.name)}</b>?\nScrivi la data, ad esempio <code>3/11</code>.`, null, 'Es. 3/11');
       return ans();
     }
     if (k === 'MTX') {
-      m.plan = []; m.end = ''; delete m.endNotified; await this.saveChat(chatId, c);
+      m.plan = []; m.end = ''; delete m.endNotified; delete m.archived; await this.saveChat(chatId, c);
       const v = this.planView(c, m); await this.edit(chatId, mid, '🧹 Cambi e fine tolti.\n\n' + v.text, v.kb);
       return ans();
     }
