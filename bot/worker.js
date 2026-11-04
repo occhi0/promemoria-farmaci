@@ -227,7 +227,8 @@ export class Store {
     if (acl.mirrors[oldId] !== undefined) { acl.mirrors[newId] = acl.mirrors[oldId]; delete acl.mirrors[oldId]; touched = true; }
     for (const k of Object.keys(acl.mirrors)) if (acl.mirrors[k] === oldId) { acl.mirrors[k] = newId; touched = true; }
     for (const bag of ['panels', 'mcv']) if (acl[bag] && acl[bag][oldId] !== undefined) { acl[bag][newId] = acl[bag][oldId]; delete acl[bag][oldId]; touched = true; }
-    if (acl.panels && acl.panels[newId]) { delete acl.panels[newId].oggi; delete acl.panels[newId].terapia; delete acl.panels[newId].pinned; }  // i vecchi messaggi non sono più modificabili
+    if (acl.panels && acl.panels[newId]) { delete acl.panels[newId].oggi; delete acl.panels[newId].terapia; delete acl.panels[newId].pinned; delete acl.panels[newId].day; }  // i vecchi messaggi non sono più modificabili
+    acl.migrated = acl.migrated || {}; acl.migrated[oldId] = newId; touched = true;   // i pulsanti dei vecchi messaggi arrivano ancora col vecchio id
     if (touched) { acl.cmdv = 0; await this.saveAcl(acl); console.log('migrato', oldId, '→', newId); }
   }
   async send(chatId, text, markup, extra = {}) {
@@ -440,7 +441,7 @@ export class Store {
       if (!Object.keys(c.sent[n.date]).length) delete c.sent[n.date];
       if (changed) await this.saveChat(chatId, c);
       // pannelli dei gruppi semplici: aggiornati se è successo qualcosa o se è cambiato il giorno
-      for (const mc of targets.slice(1)) { const P = (acl.panels || {})[mc] || {}; if (changed || P.day !== n.date) await this.updatePanel(acl, mc, c); }
+      for (const mc of targets.slice(1)) { const P = (acl.panels || {})[mc] || {}; if (changed || P.day !== n.date || !P.oggi) await this.updatePanel(acl, mc, c); }
     }
   }
 
@@ -1007,8 +1008,9 @@ export class Store {
       if (!adm) await this.send(acl.admin, '⚠️ Per tenere pulito il gruppo semplice (cancellare i promemoria già segnati e fissare il pannello), nomina il bot <b>amministratore</b> del gruppo con i permessi <b>Elimina messaggi</b> e <b>Fissa messaggi</b>.');
       return ans('Collegato');
     }
-    const dataId = (acl.mirrors || {})[chatId] || chatId;   // nei gruppi semplici i dati sono quelli del gruppo principale
-    const isMirror = dataId !== chatId;
+    const realId = (acl.migrated || {})[chatId] || chatId;    // messaggi rimasti nel gruppo prima del passaggio a supergruppo
+    const dataId = (acl.mirrors || {})[realId] || (acl.chats[realId] !== undefined ? realId : chatId);   // nei gruppi semplici i dati sono quelli del gruppo principale
+    const isMirror = !!(acl.mirrors || {})[realId];
     if (!acl.chats[dataId]) return ans('Chat non autorizzata');
     const c = await this.chat(dataId);
     const [k, ...r] = data.split('|');
@@ -1054,8 +1056,11 @@ export class Store {
       if (low) await this.send(dataId, low);
       return ans(answer);
     }
-    if (k === 'TP' && isMirror) { await this.mirrorTherapy(acl, chatId, c, acl.chats[dataId], true); return ans('Terapia qui sotto 👇'); }
-    if (k === 'OR' && isMirror) { await this.updatePanel(acl, chatId, c, true); return ans('Aggiornato'); }
+    if (k === 'TP' && isMirror) { await this.mirrorTherapy(acl, realId, c, acl.chats[dataId], true); return ans('Terapia qui sotto 👇'); }
+    if (k === 'OR' && isMirror) {
+      if (realId !== chatId) await this.del(chatId, mid);   // pannello vecchio: lo togliamo
+      await this.updatePanel(acl, realId, c, true); return ans('Aggiornato');
+    }
     if (k === 'RQ' || k === 'RP' || k === 'RI') {
       const pids = [...new Set(c.meds.filter(m => !this.ended(m, today)).map(m => m.person))];
       let pid = r[0];
