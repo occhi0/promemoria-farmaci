@@ -1,0 +1,16 @@
+name = "promemoria-farmaci-bot"
+main = "worker.js"
+compatibility_date = "2025-06-01"
+workers_dev = true
+
+# Controllo dei promemoria ogni minuto
+[triggers]
+crons = ["* * * * *"]
+
+[[durable_objects.bindings]]
+name = "STORE"
+class_name = "Store"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Store"]
