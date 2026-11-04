@@ -177,6 +177,10 @@ export class Store {
 
   /* ---------- dosi ---------- */
   person(c, id) { return (c.persons.find(p => p.id === id) || {}).name || '—'; }
+  multi(c) { return new Set(c.meds.map(m => m.person)).size > 1; }
+  // "(Mamma)" / " · Mamma" solo se nella chat ci sono farmaci di più persone
+  pp(c, id) { return this.multi(c) ? ` (${esc(this.person(c, id))})` : ''; }
+  pdot(c, id, raw) { return this.multi(c) ? ` · ${raw ? this.person(c, id) : esc(this.person(c, id))}` : ''; }
   dosesOn(c, date, dow) {
     const out = [];
     for (const m of c.meds) {
@@ -211,7 +215,7 @@ export class Store {
     const days = Math.floor(left);
     const until = addDays(romeParts().date, days).date;
     const howLong = m.stock === 0 ? '<b>sono finite</b>' : `bastano per ${days < 1 ? 'meno di un giorno' : 'circa ' + days + (days === 1 ? ' giorno' : ' giorni')}${days >= 1 ? ` (fino a ${fmtDate(until)})` : ''}`;
-    return `${level === LAST_STOCK_DAYS ? '⚠️ <b>Ultimo avviso scorte</b>' : '📦 <b>Scorte in esaurimento</b>'}\n<b>${esc(m.name)}</b>${m.dose ? ' ' + esc(m.dose) : ''} (${esc(this.person(c, m.person))}): restano ${m.stock} unità, ${howLong}.\nRicordati ricetta e farmacia. Quando lo ricompri: /farmaci → ${esc(m.name)} → 📦 Scorte.`;
+    return `${level === LAST_STOCK_DAYS ? '⚠️ <b>Ultimo avviso scorte</b>' : '📦 <b>Scorte in esaurimento</b>'}\n<b>${esc(m.name)}</b>${m.dose ? ' ' + esc(m.dose) : ''}${this.pp(c, m.person)}: restano ${m.stock} unità, ${howLong}.\nRicordati ricetta e farmacia. Quando lo ricompri: /farmaci → ${esc(m.name)} → 📦 Scorte.`;
   }
   unlog(c, date, key, m) {
     const e = this.getLog(c, date, key);
@@ -221,7 +225,7 @@ export class Store {
     if (!Object.keys(c.log[date]).length) delete c.log[date];
   }
   doseText(c, m, date, time, today) {
-    return `💊 <b>${esc(this.person(c, m.person))}</b> · ${esc(m.name)}${m.dose ? ' ' + esc(m.dose) : ''}\n🕐 Ore ${time}${today && date !== today ? ' di ' + fmtDate(date) : ''}`;
+    return `💊 ${this.multi(c) ? '<b>' + esc(this.person(c, m.person)) + '</b> · ' + esc(m.name) : '<b>' + esc(m.name) + '</b>'}${m.dose ? ' ' + esc(m.dose) : ''}\n🕐 Ore ${time}${today && date !== today ? ' di ' + fmtDate(date) : ''}`;
   }
   doseKb(date, id, time) {
     const d = `${date}|${id}|${time}`;
@@ -423,7 +427,7 @@ export class Store {
 
   /* ---------- viste ---------- */
   medText(c, m) {
-    return `<b>${esc(m.name)}</b>${m.dose ? ' ' + esc(m.dose) : ''}${m.paused ? ' ⏸ <i>in pausa</i>' : ''}\n👤 ${esc(this.person(c, m.person))}\n🕐 ${m.times.join(', ')} · ${daysText(m.days)}${m.stock != null ? `\n📦 ${m.stock} unità` : ''}`;
+    return `<b>${esc(m.name)}</b>${m.dose ? ' ' + esc(m.dose) : ''}${m.paused ? ' ⏸ <i>in pausa</i>' : ''}${this.multi(c) ? '\n👤 ' + esc(this.person(c, m.person)) : ''}\n🕐 ${m.times.join(', ')} · ${daysText(m.days)}${m.stock != null ? `\n📦 ${m.stock} unità` : ''}`;
   }
   exportView(c, title) {
     if (!c.meds.length) return 'Non ci sono farmaci da esportare.';
@@ -449,8 +453,8 @@ export class Store {
       let ic;
       if (e) { ic = e.s === 'taken' ? '✅' : '⏭'; if (e.s === 'taken') taken++; }
       else if (toMin(d.time) > n.min) ic = '⏳';
-      else { ic = n.min - toMin(d.time) > 60 ? '❗' : '🔔'; kb.push([{ text: `✅ ${d.time} ${d.m.name} · ${this.person(c, d.m.person)}`.slice(0, 60), callback_data: `O|${n.date}|${d.m.id}|${d.time}` }]); }
-      return `${ic} ${d.time}  <b>${esc(this.person(c, d.m.person))}</b> · ${esc(d.m.name)}${d.m.dose ? ' ' + esc(d.m.dose) : ''}`;
+      else { ic = n.min - toMin(d.time) > 60 ? '❗' : '🔔'; kb.push([{ text: `✅ ${d.time} ${d.m.name}${this.pdot(c, d.m.person, true)}`.slice(0, 60), callback_data: `O|${n.date}|${d.m.id}|${d.time}` }]); }
+      return `${ic} ${d.time}  ${this.multi(c) ? '<b>' + esc(this.person(c, d.m.person)) + '</b> · ' : ''}${esc(d.m.name)}${d.m.dose ? ' ' + esc(d.m.dose) : ''}`;
     });
     const text = `📅 <b>Oggi, ${fmtDate(n.date)}</b>\n${taken} di ${ds.length} dosi prese\n\n${lines.join('\n')}${kb.length ? '\n\nTocca per segnare come prese:' : ''}`;
     kb.push([{ text: '🔄 Aggiorna', callback_data: 'OR' }]);
@@ -462,11 +466,11 @@ export class Store {
     const ms = [...c.meds].sort((a, b) => order(a.person) - order(b.person) || a.name.localeCompare(b.name));
     let text = '💊 <b>Farmaci</b>\n', last = null;
     for (const m of ms) {
-      if (m.person !== last) { text += `\n👤 <b>${esc(this.person(c, m.person))}</b>\n`; last = m.person; }
+      if (m.person !== last) { text += this.multi(c) ? `\n👤 <b>${esc(this.person(c, m.person))}</b>\n` : '\n'; last = m.person; }
       text += `• ${esc(m.name)}${m.dose ? ' ' + esc(m.dose) : ''} — ${m.times.join(', ')}${m.paused ? ' ⏸' : ''}\n`;
     }
     text += '\nTocca un farmaco per modificarlo:';
-    return { text, kb: { inline_keyboard: ms.map(m => [{ text: `${m.paused ? '⏸ ' : ''}${m.name} · ${this.person(c, m.person)}`.slice(0, 60), callback_data: 'MM|' + m.id }]) } };
+    return { text, kb: { inline_keyboard: ms.map(m => [{ text: `${m.paused ? '⏸ ' : ''}${m.name}${this.pdot(c, m.person, true)}`.slice(0, 60), callback_data: 'MM|' + m.id }]) } };
   }
   medDetail(c, m) {
     return {
@@ -484,10 +488,10 @@ export class Store {
     const daysLeft = m => (m.stock == null || !m.times.length) ? Infinity : m.stock / this.perDay(m);
     const sorted = [...c.meds].sort((a, b) => daysLeft(a) - daysLeft(b) || a.name.localeCompare(b.name));
     const lines = sorted.map(m => {
-      if (m.stock == null) return `⚪ ${esc(m.name)} (${esc(this.person(c, m.person))}): non conteggiate`;
+      if (m.stock == null) return `⚪ ${esc(m.name)}${this.pp(c, m.person)}: non conteggiate`;
       const left = m.stock / this.perDay(m), d = Math.floor(left);
       const dot = left <= LOW_STOCK_DAYS ? '🔴' : left <= YELLOW_DAYS ? '🟡' : '🟢';
-      const txt = `${esc(m.name)} (${esc(this.person(c, m.person))}): ${m.stock} unità, ${d < 1 ? 'meno di un giorno' : 'circa ' + d + (d === 1 ? ' giorno' : ' giorni')}`;
+      const txt = `${esc(m.name)}${this.pp(c, m.person)}: ${m.stock} unità, ${d < 1 ? 'meno di un giorno' : 'circa ' + d + (d === 1 ? ' giorno' : ' giorni')}`;
       return `${dot} ${dot === '🔴' ? '<b>' + txt + '</b>' : txt}`;
     });
     return `📦 <b>Scorte</b>\n\n${lines.join('\n')}\n\n🟢 più di ${YELLOW_DAYS} giorni · 🟡 ${YELLOW_DAYS} giorni o meno · 🔴 ${LOW_STOCK_DAYS} giorni o meno · ⚪ non conteggiate\nPer aggiornarle: /farmaci → farmaco → 📦 Scorte.`;
@@ -504,13 +508,13 @@ export class Store {
         const p = per[d.m.id] = per[d.m.id] || { m: d.m, t: 0, n: 0 };
         p.n++;
         if (e && e.s === 'taken') p.t++;
-        else if (!e && miss.length < 10) miss.push(`${fmtDate(day.date)} ${d.time} · ${esc(this.person(c, d.m.person))} · ${esc(d.m.name)}`);
+        else if (!e && miss.length < 10) miss.push(`${fmtDate(day.date)} ${d.time}${this.pdot(c, d.m.person)} · ${esc(d.m.name)}`);
       }
     }
     const rows = Object.values(per);
     if (!rows.length) return '📊 Nessuna dose negli ultimi 7 giorni.';
     const bar = r => { const k = Math.round(r * 5); return '🟩'.repeat(k) + '⬜'.repeat(5 - k); };
-    let text = '📊 <b>Ultimi 7 giorni</b>\n\n' + rows.map(p => `${bar(p.t / p.n)} ${p.t}/${p.n}  <b>${esc(this.person(c, p.m.person))}</b> · ${esc(p.m.name)}`).join('\n');
+    let text = '📊 <b>Ultimi 7 giorni</b>\n\n' + rows.map(p => `${bar(p.t / p.n)} ${p.t}/${p.n}  ${this.multi(c) ? '<b>' + esc(this.person(c, p.m.person)) + '</b> · ' : ''}${esc(p.m.name)}`).join('\n');
     if (miss.length) text += `\n\n<b>Non segnate:</b>\n${miss.join('\n')}`;
     return text;
   }
@@ -660,7 +664,7 @@ export class Store {
       return ans();
     }
     if (k === 'MD') {
-      await this.edit(chatId, mid, `Eliminare <b>${esc(m.name)}</b> di ${esc(this.person(c, m.person))}? Si perde anche il suo storico.`,
+      await this.edit(chatId, mid, `Eliminare <b>${esc(m.name)}</b>${this.multi(c) ? ' di ' + esc(this.person(c, m.person)) : ''}? Si perde anche il suo storico.`,
         { inline_keyboard: [[{ text: '🗑 Sì, elimina', callback_data: 'MDY|' + m.id }, { text: 'No', callback_data: 'MM|' + m.id }]] });
       return ans();
     }
