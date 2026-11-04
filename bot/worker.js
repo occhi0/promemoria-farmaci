@@ -342,10 +342,12 @@ export class Store {
     }
   }
   async refreshPanels(acl, srcId, c) { for (const mc of this.mirrorsOf(acl, srcId)) await this.updatePanel(acl, mc, c); }
-  async mirrorTherapy(acl, mc, c, title) {
+  // fresh = cancella il vecchio messaggio e lo rimanda in fondo, così si vede subito
+  async mirrorTherapy(acl, mc, c, title, fresh) {
     acl.panels = acl.panels || {}; const P = acl.panels[mc] = acl.panels[mc] || {};
     const { text, kb } = this.therapyMsg(c, title);
-    if (P.terapia) { const r = await this.edit(mc, P.terapia, text, kb); if (r.ok || /not modified/i.test(r.description || '')) return; }
+    if (P.terapia && !fresh) { const r = await this.edit(mc, P.terapia, text, kb); if (r.ok || /not modified/i.test(r.description || '')) return; }
+    if (P.terapia && fresh) await this.del(mc, P.terapia);
     const r = await this.send(mc, text, kb);
     if (r.ok) { P.terapia = r.result.message_id; await this.saveAcl(acl); }
   }
@@ -441,7 +443,7 @@ export class Store {
         await tg(this.env, 'deleteMyCommands', { scope: { type: 'chat', chat_id: Number(chatId) } });
       }
       if (cmd === '/oggi') return this.updatePanel(acl, chatId, await this.chat(src), true);
-      if (cmd === '/terapia') return this.mirrorTherapy(acl, chatId, await this.chat(src), acl.chats[src]);
+      if (cmd === '/terapia') return this.mirrorTherapy(acl, chatId, await this.chat(src), acl.chats[src], true);
       if (cmd === '/scollega' && uid === acl.admin) {
         delete acl.mirrors[chatId]; await this.saveAcl(acl);
         await tg(this.env, 'deleteMyCommands', { scope: { type: 'chat', chat_id: Number(chatId) } });
@@ -1013,7 +1015,7 @@ export class Store {
       if (low) await this.send(dataId, low);
       return ans(answer);
     }
-    if (k === 'TP' && isMirror) { await this.mirrorTherapy(acl, chatId, c, acl.chats[dataId]); return ans(); }
+    if (k === 'TP' && isMirror) { await this.mirrorTherapy(acl, chatId, c, acl.chats[dataId], true); return ans('Terapia qui sotto 👇'); }
     if (k === 'OR' && isMirror) { await this.updatePanel(acl, chatId, c, true); return ans('Aggiornato'); }
     if (k === 'RQ' || k === 'RP' || k === 'RI') {
       const pids = [...new Set(c.meds.filter(m => !this.ended(m, today)).map(m => m.person))];
