@@ -316,12 +316,19 @@ export class Store {
     const v = this.todayView(c, true);
     if (P.oggi) {
       const r = await this.edit(mc, P.oggi, v.text, v.kb);
-      if (r.ok || /not modified/i.test(r.description || '')) { if (P.day !== romeParts().date) { P.day = romeParts().date; await this.saveAcl(acl); } return; }
+      if (r.ok || /not modified/i.test(r.description || '')) {
+        let dirty = false;
+        if (P.day !== romeParts().date) { P.day = romeParts().date; dirty = true; }
+        if (!P.pinned) { const pr = await tg(this.env, 'pinChatMessage', { chat_id: mc, message_id: P.oggi, disable_notification: true }); if (pr.ok) { P.pinned = true; dirty = true; } }
+        if (dirty) await this.saveAcl(acl);
+        return;
+      }
     }
     const r = await this.send(mc, v.text, v.kb);
     if (r.ok) {
-      P.oggi = r.result.message_id; P.day = romeParts().date; await this.saveAcl(acl);
-      await tg(this.env, 'pinChatMessage', { chat_id: mc, message_id: P.oggi, disable_notification: true });
+      P.oggi = r.result.message_id; P.day = romeParts().date;
+      const pr = await tg(this.env, 'pinChatMessage', { chat_id: mc, message_id: P.oggi, disable_notification: true });
+      P.pinned = !!pr.ok; await this.saveAcl(acl);
     }
   }
   async refreshPanels(acl, srcId, c) { for (const mc of this.mirrorsOf(acl, srcId)) await this.updatePanel(acl, mc, c); }
