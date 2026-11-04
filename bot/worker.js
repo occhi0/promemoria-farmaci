@@ -381,7 +381,10 @@ export class Store {
           return this.send(chatId, 'Operazione annullata.', { remove_keyboard: true, selective: true });
         case '/oggi': { const v = this.todayView(c); return this.send(chatId, v.text, v.kb); }
         case '/farmaci': { const v = this.medsView(c); return this.send(chatId, v.text, v.kb); }
-        case '/scorte': return this.send(chatId, this.stockView(c));
+        case '/scorte': {
+          const has = c.meds.some(m => !this.ended(m, romeParts().date));
+          return this.send(chatId, this.stockView(c), has ? { inline_keyboard: [[{ text: '📤 Richiedi ricette', callback_data: 'RQ' }]] } : undefined);
+        }
         case '/storico': return this.send(chatId, this.historyView(c));
         case '/esporta': return this.send(chatId, this.exportView(c, msg.chat.title));
         case '/terapia': {
@@ -523,6 +526,28 @@ export class Store {
         delete c.flows[uid]; await save();
         const v = this.planView(c, m);
         return this.send(chatId, '✅ Cambio programmato.\n\n' + v.text, v.kb);
+      }
+      case 'pinfo_name': case 'pinfo_birth': case 'pinfo_cf': {
+        const p = c.persons.find(x => x.id === d.pid);
+        if (!p) { delete c.flows[uid]; await save(); return this.send(chatId, 'Persona non trovata.'); }
+        p.info = p.info || {};
+        if (fl.step === 'pinfo_name') {
+          p.info.full = text.slice(0, 60); fl.step = 'pinfo_birth'; await save();
+          return this.ask(chatId, 'Data di nascita? (es. <code>12/03/1940</code>)\nScrivi <b>-</b> per saltare.', mid, 'Es. 12/03/1940');
+        }
+        if (fl.step === 'pinfo_birth') {
+          p.info.birth = isSkip(text) ? '' : text.slice(0, 20); fl.step = 'pinfo_cf'; await save();
+          return this.ask(chatId, 'Codice fiscale?\nScrivi <b>-</b> per saltare.', mid, 'Es. RSSMRA40C52H501X');
+        }
+        if (isSkip(text)) p.info.cf = '';
+        else {
+          const cf = text.toUpperCase().replace(/\s+/g, '');
+          if (!/^[A-Z0-9]{16}$/.test(cf)) return this.ask(chatId, 'Il codice fiscale ha 16 caratteri (lettere e numeri). Riprova, oppure scrivi <b>-</b> per saltare.', mid, 'Codice fiscale');
+          p.info.cf = cf;
+        }
+        this.startReq(c, uid, p.id); await save();
+        const v = this.reqView(c, uid, d.who);
+        return this.send(chatId, '✅ Dati salvati.\n\n' + v.text, v.kb);
       }
       case 'psince': {
         const m = c.meds.find(x => x.id === d.med); const today = romeParts().date;
@@ -732,6 +757,33 @@ export class Store {
       }
     };
   }
+  // Richiesta ricette al medico: selezione dei farmaci e messaggio pronto per WhatsApp
+  reqView(c, uid, who) {
+    const fl = c.flows[uid]; const rq = fl && fl.req;
+    if (!rq) return { text: 'Ricomincia da /scorte.' };
+    const p = c.persons.find(x => x.id === rq.pid);
+    const today = romeParts().date;
+    const ms = c.meds.filter(m => m.person === rq.pid && !this.ended(m, today))
+      .sort((a, b) => a.name.localeCompare(b.name, 'it', { sensitivity: 'base' }));
+    const seen = new Set(); const uniq = ms.filter(m => { const k = (m.name + '|' + m.dose).toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
+    const left = m => (m.stock == null || !m.times.length) ? null : Math.floor(m.stock / this.perDay(m));
+    const info = p.info || {};
+    const chosen = uniq.filter(m => rq.sel.includes(m.id));
+    let wa = `Buongiorno, vorrei richiedere ${chosen.length === 1 ? 'la ricetta' : 'le ricette'} per:\n*${info.full || p.name}*`;
+    if (info.birth) wa += `\nData di nascita: ${info.birth}`;
+    if (info.cf) wa += `\nC.F. ${info.cf}`;
+    wa += '\n\n' + chosen.map(m => `• ${m.name}${m.dose ? ' ' + m.dose : ''}`).join('\n') + `\n\nGrazie${who ? ',\n' + who : ''}`;
+    const text = `📤 <b>Richiesta ricette</b> — ${esc(info.full || p.name)}${info.birth ? '\nData di nascita: ' + esc(info.birth) : ''}${info.cf ? '\nC.F. ' + esc(info.cf) : ''}\n\nTocca i farmaci per sceglierli (✅ = da richiedere). Sono già selezionati quelli con ${YELLOW_DAYS} giorni o meno.`;
+    const kb = uniq.map(m => { const d = left(m); return [{ text: `${rq.sel.includes(m.id) ? '✅' : '⬜'} ${m.name}${m.dose ? ' ' + m.dose : ''}${d != null ? ` · ${d} gg` : ''}`.slice(0, 60), callback_data: 'RT|' + m.id }]; });
+    if (chosen.length) kb.push([{ text: `📤 Invia su WhatsApp (${chosen.length})`, url: 'https://wa.me/?text=' + encodeURIComponent(wa) }]);
+    kb.push([{ text: '✏️ Dati assistita', callback_data: 'RI|' + p.id }, { text: 'Chiudi', callback_data: 'RX' }]);
+    return { text, kb: { inline_keyboard: kb } };
+  }
+  startReq(c, uid, pid) {
+    const today = romeParts().date;
+    const sel = c.meds.filter(m => m.person === pid && !this.ended(m, today) && m.stock != null && m.times.length && m.stock / this.perDay(m) <= YELLOW_DAYS).map(m => m.id);
+    c.flows[uid] = { step: 'req', d: {}, req: { pid, sel } };
+  }
   stockView(c) {
     if (!c.meds.length) return 'Non ci sono ancora farmaci.';
     const daysLeft = m => (m.stock == null || !m.times.length || this.ended(m, romeParts().date)) ? Infinity : m.stock / this.perDay(m);
@@ -825,6 +877,38 @@ export class Store {
         return ans(`Rimandato di ${SNOOZE_MIN} minuti`);
       }
     }
+    if (k === 'RQ' || k === 'RP' || k === 'RI') {
+      const pids = [...new Set(c.meds.filter(m => !this.ended(m, today)).map(m => m.person))];
+      let pid = r[0];
+      if (k === 'RQ') {
+        if (!pids.length) return ans('Nessun farmaco in corso');
+        if (pids.length > 1) {
+          await this.send(chatId, 'Per chi sono le ricette?', { inline_keyboard: pids.map(id => [{ text: this.person(c, id), callback_data: 'RP|' + id }]) });
+          return ans();
+        }
+        pid = pids[0];
+      }
+      const p = c.persons.find(x => x.id === pid);
+      if (!p) return ans();
+      if (k === 'RI' || !(p.info && p.info.full)) {
+        c.flows[uid] = { step: 'pinfo_name', d: { pid: p.id, who } }; await this.saveChat(chatId, c);
+        await this.ask(chatId, `Per la richiesta al medico mi servono i dati dell'assistita (li ricordo per le prossime volte).\n\nNome e cognome di <b>${esc(p.name)}</b>?`, null, 'Es. Maria Rossi');
+        return ans();
+      }
+      this.startReq(c, uid, p.id); await this.saveChat(chatId, c);
+      const v = this.reqView(c, uid, who); await this.send(chatId, v.text, v.kb);
+      return ans();
+    }
+    if (k === 'RT') {
+      const fl2 = c.flows[uid];
+      if (!fl2 || !fl2.req) return ans('Ricomincia da /scorte');
+      const id = r[0]; const sel = fl2.req.sel;
+      fl2.req.sel = sel.includes(id) ? sel.filter(x => x !== id) : [...sel, id];
+      await this.saveChat(chatId, c);
+      const v = this.reqView(c, uid, who); await this.edit(chatId, mid, v.text, v.kb);
+      return ans();
+    }
+    if (k === 'RX') { delete c.flows[uid]; await this.saveChat(chatId, c); await this.edit(chatId, mid, 'Richiesta chiusa.'); return ans(); }
     if (k === 'OR') { const v = this.todayView(c); await this.edit(chatId, mid, v.text, v.kb); return ans('Aggiornato'); }
 
     if (k === 'TR') {
