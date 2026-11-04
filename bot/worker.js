@@ -8,6 +8,7 @@ const FOLLOW_UP_MIN = 30;   // secondo avviso se la dose non è segnata
 const SNOOZE_MIN = 10;
 const LOW_STOCK_DAYS = 7;   // primo avviso scorte
 const LAST_STOCK_DAYS = 2;  // ultimo avviso
+const YELLOW_DAYS = 15;     // pallino giallo in /scorte
 const STOCK_CHECK_HM = '09:00';
 
 const esc = s => String(s ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
@@ -485,11 +486,11 @@ export class Store {
     const lines = sorted.map(m => {
       if (m.stock == null) return `⚪ ${esc(m.name)} (${esc(this.person(c, m.person))}): non conteggiate`;
       const left = m.stock / this.perDay(m), d = Math.floor(left);
-      const dot = left <= LAST_STOCK_DAYS ? '🔴' : left <= LOW_STOCK_DAYS ? '🟠' : '🟢';
+      const dot = left <= LOW_STOCK_DAYS ? '🔴' : left <= YELLOW_DAYS ? '🟡' : '🟢';
       const txt = `${esc(m.name)} (${esc(this.person(c, m.person))}): ${m.stock} unità, ${d < 1 ? 'meno di un giorno' : 'circa ' + d + (d === 1 ? ' giorno' : ' giorni')}`;
-      return `${dot} ${dot === '🟢' ? txt : '<b>' + txt + '</b>'}`;
+      return `${dot} ${dot === '🔴' ? '<b>' + txt + '</b>' : txt}`;
     });
-    return `📦 <b>Scorte</b>\n\n${lines.join('\n')}\n\n🟢 più di ${LOW_STOCK_DAYS} giorni · 🟠 ${LOW_STOCK_DAYS} giorni o meno · 🔴 ${LAST_STOCK_DAYS} giorni o meno · ⚪ non conteggiate\nPer aggiornarle: /farmaci → farmaco → 📦 Scorte.`;
+    return `📦 <b>Scorte</b>\n\n${lines.join('\n')}\n\n🟢 più di ${YELLOW_DAYS} giorni · 🟡 ${YELLOW_DAYS} giorni o meno · 🔴 ${LOW_STOCK_DAYS} giorni o meno · ⚪ non conteggiate\nPer aggiornarle: /farmaci → farmaco → 📦 Scorte.`;
   }
   historyView(c) {
     const n = romeParts();
