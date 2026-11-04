@@ -292,20 +292,45 @@ export class Store {
     return { inline_keyboard: [[{ text: '✅ Preso', callback_data: 'T|' + d }], [{ text: `⏰ ${SNOOZE_MIN} min`, callback_data: 'Z|' + d }, { text: '⏭ Salta', callback_data: 'S|' + d }]] };
   }
 
-  // Pulsanti fissi del gruppo semplice. Iniziano con "/" così il bot li riceve anche con la privacy dei gruppi attiva.
-  mirrorKb() {
-    return { keyboard: [[{ text: '/oggi 📅 Dosi di oggi' }, { text: '/terapia 🩺 Terapia' }]], resize_keyboard: true, is_persistent: true };
-  }
-  async sendMirrorKb(chatId) {
-    return this.send(chatId, '👇 Qui sotto trovi sempre i pulsanti <b>📅 Dosi di oggi</b> e <b>🩺 Terapia</b>.', this.mirrorKb());
-  }
   mirrorsOf(acl, src) { return Object.keys(acl.mirrors || {}).filter(k => acl.mirrors[k] === src); }
   // aggiorna tutte le copie del promemoria (gruppo principale e gruppo semplice), tranne quella già modificata
-  async syncCopies(c, srcId, date, key, exceptChat, exceptMid, text, kb) {
+  async syncCopies(c, srcId, date, key, exceptChat, exceptMid, text, kb, skip) {
     const S = (c.sent[date] || {})[key];
     if (!S) return;
     const msgs = S.msgs || (S.m ? [[srcId, S.m]] : []);
-    for (const [ch, id] of msgs) if (!(String(ch) === String(exceptChat) && id === exceptMid)) await this.edit(ch, id, text, kb);
+    for (const [ch, id] of msgs) {
+      if (skip && skip.has(String(ch))) continue;
+      if (!(String(ch) === String(exceptChat) && id === exceptMid)) await this.edit(ch, id, text, kb);
+    }
+  }
+  del(chatId, mid) { return tg(this.env, 'deleteMessage', { chat_id: chatId, message_id: mid }); }
+  async delMirrorCopies(c, date, key, mset) {
+    const S = (c.sent[date] || {})[key];
+    if (!S || !S.msgs) return;
+    for (const [ch, id] of S.msgs) if (mset.has(String(ch))) await this.del(ch, id);
+    S.msgs = S.msgs.filter(([ch]) => !mset.has(String(ch)));
+  }
+  // Pannello "Oggi" fissato in alto nel gruppo semplice: un solo messaggio, sempre aggiornato
+  async updatePanel(acl, mc, c, force) {
+    acl.panels = acl.panels || {}; const P = acl.panels[mc] = acl.panels[mc] || {};
+    const v = this.todayView(c, true);
+    if (P.oggi) {
+      const r = await this.edit(mc, P.oggi, v.text, v.kb);
+      if (r.ok || /not modified/i.test(r.description || '')) { if (P.day !== romeParts().date) { P.day = romeParts().date; await this.saveAcl(acl); } return; }
+    }
+    const r = await this.send(mc, v.text, v.kb);
+    if (r.ok) {
+      P.oggi = r.result.message_id; P.day = romeParts().date; await this.saveAcl(acl);
+      await tg(this.env, 'pinChatMessage', { chat_id: mc, message_id: P.oggi, disable_notification: true });
+    }
+  }
+  async refreshPanels(acl, srcId, c) { for (const mc of this.mirrorsOf(acl, srcId)) await this.updatePanel(acl, mc, c); }
+  async mirrorTherapy(acl, mc, c, title) {
+    acl.panels = acl.panels || {}; const P = acl.panels[mc] = acl.panels[mc] || {};
+    const { text, kb } = this.therapyMsg(c, title);
+    if (P.terapia) { const r = await this.edit(mc, P.terapia, text, kb); if (r.ok || /not modified/i.test(r.description || '')) return; }
+    const r = await this.send(mc, text, kb);
+    if (r.ok) { P.terapia = r.result.message_id; await this.saveAcl(acl); }
   }
 
   /* ---------- promemoria (cron) ---------- */
@@ -328,6 +353,7 @@ export class Store {
           sent[d.key] = { m: msgs.length && msgs[0][1], f: 0, msgs };
           changed = true;
         } else if (S && !S.f && late >= FOLLOW_UP_MIN && late <= 240) {
+          await this.delMirrorCopies(c, n.date, d.key, new Set(targets.slice(1)));
           const msgs = await sendAll(`⏰ <b>Non ancora segnato</b>\n` + this.doseText(c, d.m, n.date, d.time), this.doseKb(n.date, d.m.id, d.time));
           S.msgs = [...(S.msgs || (S.m ? [[chatId, S.m]] : [])), ...msgs];
           S.f = 1; changed = true;
@@ -339,6 +365,7 @@ export class Store {
         for (const s of due) {
           const m = c.meds.find(x => x.id === s.medId);
           if (!m || this.getLog(c, s.date, s.key)) continue;
+          await this.delMirrorCopies(c, s.date, s.key, new Set(targets.slice(1)));
           const msgs = await sendAll(`⏰ <b>Te lo ricordo</b>\n` + this.doseText(c, m, s.date, s.time, n.date), this.doseKb(s.date, m.id, s.time));
           const S2 = (c.sent[s.date] || {})[s.key];
           if (S2) S2.msgs = [...(S2.msgs || (S2.m ? [[chatId, S2.m]] : [])), ...msgs];
@@ -362,6 +389,8 @@ export class Store {
       for (const k of Object.keys(c.log)) if (k < keepLog) { delete c.log[k]; changed = true; }
       if (!Object.keys(c.sent[n.date]).length) delete c.sent[n.date];
       if (changed) await this.saveChat(chatId, c);
+      // pannelli dei gruppi semplici: aggiornati se è successo qualcosa o se è cambiato il giorno
+      for (const mc of targets.slice(1)) { const P = (acl.panels || {})[mc] || {}; if (changed || P.day !== n.date) await this.updatePanel(acl, mc, c); }
     }
   }
 
@@ -386,13 +415,15 @@ export class Store {
     acl.mirrors = acl.mirrors || {};
     if (acl.mirrors[chatId]) {
       const src = acl.mirrors[chatId];
-      if ((cmd === '/oggi' || cmd === '/terapia') && ((acl.mcv || {})[chatId] || 0) < 3) {
-        acl.mcv = acl.mcv || {}; acl.mcv[chatId] = 3; await this.saveAcl(acl);
-        await this.sendMirrorKb(chatId);
+      if (cmd) await this.del(chatId, msg.message_id);   // pagina pulita: via i comandi scritti
+      if ((cmd === '/oggi' || cmd === '/terapia') && ((acl.mcv || {})[chatId] || 0) < 4) {
+        acl.mcv = acl.mcv || {}; acl.mcv[chatId] = 4; await this.saveAcl(acl);
+        const rk = await this.send(chatId, '…', { remove_keyboard: true });   // toglie i vecchi pulsanti fissi
+        if (rk.ok) await this.del(chatId, rk.result.message_id);
         await tg(this.env, 'setMyCommands', { commands: [{ command: 'oggi', description: 'Dosi di oggi' }, { command: 'terapia', description: 'Elenco della terapia per il medico' }], scope: { type: 'chat', chat_id: Number(chatId) } });
       }
-      if (cmd === '/oggi') { const v = this.todayView(await this.chat(src)); return this.send(chatId, v.text, v.kb); }
-      if (cmd === '/terapia') return this.sendTherapy(chatId, await this.chat(src), acl.chats[src]);
+      if (cmd === '/oggi') return this.updatePanel(acl, chatId, await this.chat(src), true);
+      if (cmd === '/terapia') return this.mirrorTherapy(acl, chatId, await this.chat(src), acl.chats[src]);
       if (cmd === '/scollega' && uid === acl.admin) {
         delete acl.mirrors[chatId]; await this.saveAcl(acl);
         await tg(this.env, 'deleteMyCommands', { scope: { type: 'chat', chat_id: Number(chatId) } });
@@ -401,6 +432,7 @@ export class Store {
       return;
     }
     if (cmd === '/collega' && !priv && uid === acl.admin) {
+      await this.del(chatId, msg.message_id);
       if (acl.chats[chatId] && (await this.chat(chatId)).meds.length) return this.send(chatId, 'Questo gruppo ha già dei farmaci suoi: crea un gruppo nuovo per i soli promemoria.');
       const srcs = Object.keys(acl.chats).filter(id => id !== chatId);
       if (!srcs.length) return this.send(chatId, 'Non ci sono gruppi da collegare.');
@@ -660,6 +692,12 @@ export class Store {
     const extra = (next ? `\n🔁 dal ${fmtDate(next.from)}: ${next.times.join(', ')}` : '') + (m.end ? `\n🏁 ${this.ended(m, today) ? 'terminata il' : 'fino al'} ${fmtDate(m.end)}` : '');
     return `<b>${esc(m.name)}</b>${m.dose ? ' ' + esc(m.dose) : ''}${m.paused ? ' ⏸ <i>in pausa</i>' : ''}${this.multi(c) ? '\n👤 ' + esc(this.person(c, m.person)) : ''}\n🕐 ${m.times.join(', ')} · ${daysText(m.days)}${m.stock != null ? `\n📦 ${m.stock} unità` : ''}` + extra;
   }
+  therapyMsg(c, title) {
+    const text = this.therapyView(c, title);
+    const plain = text.replace(/<b>(.*?)<\/b>/g, '*$1*').replace(/<[^>]+>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+    const url = 'https://wa.me/?text=' + encodeURIComponent(plain);
+    return { text, kb: c.meds.length && url.length <= 4000 ? { inline_keyboard: [[{ text: '📤 Invia su WhatsApp', url }]] } : undefined };
+  }
   async sendTherapy(chatId, c, title) {
     const t = this.therapyView(c, title);
     // versione per WhatsApp: *grassetto* al posto dei tag HTML
@@ -725,11 +763,12 @@ export class Store {
     }
     return t;
   }
-  todayView(c) {
+  todayView(c, panel) {
     const n = romeParts();
-    if (!c.meds.length) return { text: 'Non ci sono ancora farmaci. Usa /aggiungi per inserirne uno.' };
+    const pkb = panel ? { inline_keyboard: [[{ text: '🔄 Aggiorna', callback_data: 'OR' }, { text: '🩺 Terapia', callback_data: 'TP' }]] } : undefined;
+    if (!c.meds.length) return { text: 'Non ci sono ancora farmaci. Usa /aggiungi per inserirne uno.', kb: pkb };
     const ds = this.dosesOn(c, n.date, n.dow);
-    if (!ds.length) return { text: '📅 <b>Oggi</b>\nNessuna dose prevista.' };
+    if (!ds.length) return { text: `📅 <b>Oggi, ${fmtDate(n.date)}</b>\nNessuna dose prevista.`, kb: pkb };
     let taken = 0;
     const kb = [];
     const lines = ds.map(d => {
@@ -738,11 +777,11 @@ export class Store {
       if (e) { ic = e.s === 'taken' ? '✅' : '⏭'; if (e.s === 'taken') taken++; }
       else if (toMin(d.time) > n.min) ic = '⏳';
       else { ic = n.min - toMin(d.time) > 60 ? '❗' : '🔔'; kb.push([{ text: `✅ ${d.time} ${d.m.name}${this.pdot(c, d.m.person, true)}`.slice(0, 60), callback_data: `O|${n.date}|${d.m.id}|${d.time}` }]); }
-      return `${ic} ${d.time}  ${this.multi(c) ? '<b>' + esc(this.person(c, d.m.person)) + '</b> · ' : ''}${esc(d.m.name)}${d.m.dose ? ' ' + esc(d.m.dose) : ''}`;
+      return `${ic} ${d.time}  ${this.multi(c) ? '<b>' + esc(this.person(c, d.m.person)) + '</b> · ' : ''}${esc(d.m.name)}${d.m.dose ? ' ' + esc(d.m.dose) : ''}${panel && e && e.by ? ' · <i>' + esc(e.by) + '</i>' : ''}`;
     });
     const text = `📅 <b>Oggi, ${fmtDate(n.date)}</b>\n${taken} di ${ds.length} dosi prese\n\n${lines.join('\n')}${kb.length ? '\n\nTocca per segnare come prese:' : ''}`;
-    kb.push([{ text: '🔄 Aggiorna', callback_data: 'OR' }]);
-    return { text, kb: { inline_keyboard: kb } };
+    kb.push(panel ? [{ text: '🔄 Aggiorna', callback_data: 'OR' }, { text: '🩺 Terapia', callback_data: 'TP' }] : [{ text: '🔄 Aggiorna', callback_data: 'OR' }]);
+    return { text: panel ? text + `\n\n<i>Quando arriva un promemoria tocca ✅ Preso (⏰ per rimandare, ⏭ per saltare). Aggiornato alle ${n.hm}.</i>` : text, kb: { inline_keyboard: kb } };
   }
   medsView(c) {
     const today = romeParts().date;
@@ -897,10 +936,15 @@ export class Store {
       if (!acl.chats[src] || src === chatId) return ans();
       acl.mirrors = acl.mirrors || {}; acl.mirrors[chatId] = src; delete acl.chats[chatId];
       await this.saveAcl(acl);
-      acl.mcv = acl.mcv || {}; acl.mcv[chatId] = 3; await this.saveAcl(acl);
+      acl.mcv = acl.mcv || {}; acl.mcv[chatId] = 4; await this.saveAcl(acl);
       await tg(this.env, 'setMyCommands', { commands: [{ command: 'oggi', description: 'Dosi di oggi' }, { command: 'terapia', description: 'Elenco della terapia per il medico' }], scope: { type: 'chat', chat_id: Number(chatId) } });
-      await this.edit(chatId, mid, `✅ Fatto! Qui arriveranno i promemoria di <b>${esc(src === acl.admin ? 'chat privata' : acl.chats[src])}</b>.\n\nQuando arriva un messaggio basta toccare:\n✅ <b>Preso</b> quando la dose è stata data\n⏰ <b>10 min</b> per ricordarlo più tardi\n⏭ <b>Salta</b> se oggi non va data\n\nPer vedere le dosi della giornata: /oggi\nPer l'elenco della terapia da mostrare al medico: /terapia`);
-      await this.sendMirrorKb(chatId);
+      await this.del(chatId, mid);
+      const sc = await this.chat(src);
+      await this.mirrorTherapy(acl, chatId, sc, acl.chats[src]);
+      await this.updatePanel(acl, chatId, sc, true);
+      const st = await tg(this.env, 'getChatMember', { chat_id: chatId, user_id: Number(this.env.TELEGRAM_BOT_TOKEN.split(':')[0]) });
+      const adm = st.ok && st.result && st.result.status === 'administrator' && st.result.can_delete_messages && st.result.can_pin_messages;
+      if (!adm) await this.send(acl.admin, '⚠️ Per tenere pulito il gruppo semplice (cancellare i promemoria già segnati e fissare il pannello), nomina il bot <b>amministratore</b> del gruppo con i permessi <b>Elimina messaggi</b> e <b>Fissa messaggi</b>.');
       return ans('Collegato');
     }
     const dataId = (acl.mirrors || {})[chatId] || chatId;   // nei gruppi semplici i dati sono quelli del gruppo principale
@@ -909,51 +953,49 @@ export class Store {
     const c = await this.chat(dataId);
     const [k, ...r] = data.split('|');
     const today = romeParts().date;
-    if (isMirror && !['T', 'S', 'Z', 'U', 'O', 'OR'].includes(k)) return ans();
+    if (isMirror && !['T', 'S', 'Z', 'U', 'O', 'OR', 'TP'].includes(k)) return ans();
 
     if (['T', 'S', 'Z', 'U', 'O'].includes(k)) {
       const [date, medId, time] = r;
       const m = c.meds.find(x => x.id === medId);
-      if (!m) { await this.edit(chatId, mid, 'Questo farmaco non è più in elenco.'); return ans(); }
+      if (!m) { if (isMirror) await this.del(chatId, mid); else await this.edit(chatId, mid, 'Questo farmaco non è più in elenco.'); return ans(); }
       const key = medId + '@' + time;
-      if (k === 'O') {
-        const low = this.getLog(c, date, key) ? null : this.logDose(c, date, key, m, 'taken', who);
-        await this.saveChat(dataId, c);
-        const v = this.todayView(c); await this.edit(chatId, mid, v.text, v.kb);
-        await this.syncCopies(c, dataId, date, key, null, null, this.doseText(c, m, date, time, today) + `\n\n✅ Preso alle ${hmOf(Date.now())}${who ? ' · ' + esc(who) : ''}`,
-          { inline_keyboard: [[{ text: '↩️ Annulla', callback_data: `U|${date}|${medId}|${time}` }]] });
-        if (low) await this.send(dataId, low);
-        return ans('Segnato come preso');
-      }
-      if (k === 'T' || k === 'S') {
-        const low = this.logDose(c, date, key, m, k === 'T' ? 'taken' : 'skipped', who);
-        await this.saveChat(dataId, c);
-        const txt = this.doseText(c, m, date, time, today) + `\n\n${k === 'T' ? '✅ Preso' : '⏭ Saltato'} alle ${hmOf(Date.now())}${who ? ' · ' + esc(who) : ''}`;
-        const kbU = { inline_keyboard: [[{ text: '↩️ Annulla', callback_data: `U|${date}|${medId}|${time}` }]] };
-        await this.edit(chatId, mid, txt, kbU);
-        await this.syncCopies(c, dataId, date, key, chatId, mid, txt, kbU);
-        if (low) await this.send(dataId, low);
-        return ans(k === 'T' ? 'Segnato come preso' : 'Segnato come saltato');
-      }
-      if (k === 'U') {
-        this.unlog(c, date, key, m); await this.saveChat(dataId, c);
-        await this.edit(chatId, mid, this.doseText(c, m, date, time, today), this.doseKb(date, medId, time));
-        await this.syncCopies(c, dataId, date, key, chatId, mid, this.doseText(c, m, date, time, today), this.doseKb(date, medId, time));
-        return ans('Annullato');
-      }
-      if (k === 'Z') {
+      const mset = new Set(this.mirrorsOf(acl, dataId));
+      const pressedReminder = !(k === 'O');            // O arriva dal pannello / da /oggi
+      let low = null, answer = '', txt, kb;
+      if (k === 'O' || k === 'T' || k === 'S') {
+        const s0 = k === 'S' ? 'skipped' : 'taken';
+        if (!(k === 'O' && this.getLog(c, date, key))) low = this.logDose(c, date, key, m, s0, who);
+        txt = this.doseText(c, m, date, time, today) + `\n\n${s0 === 'taken' ? '✅ Preso' : '⏭ Saltato'} alle ${hmOf(Date.now())}${who ? ' · ' + esc(who) : ''}`;
+        kb = { inline_keyboard: [[{ text: '↩️ Annulla', callback_data: `U|${date}|${medId}|${time}` }]] };
+        answer = s0 === 'taken' ? 'Segnato come preso' : 'Segnato come saltato';
+      } else if (k === 'U') {
+        this.unlog(c, date, key, m);
+        txt = this.doseText(c, m, date, time, today); kb = this.doseKb(date, medId, time); answer = 'Annullato';
+      } else { // Z
         if (this.getLog(c, date, key)) return ans('Già segnato');
         const at = Date.now() + SNOOZE_MIN * 60e3;
-        c.snooze = c.snooze.filter(s => !(s.key === key && s.date === date));
+        c.snooze = c.snooze.filter(x => !(x.key === key && x.date === date));
         c.snooze.push({ date, key, medId, time, at });
         const S = (c.sent[date] || {})[key]; if (S) S.f = 1;
-        await this.saveChat(dataId, c);
-        const zt = this.doseText(c, m, date, time, today) + `\n\n⏰ Rimandato alle ${hmOf(at)}${who ? ' · ' + esc(who) : ''}`;
-        await this.edit(chatId, mid, zt);
-        await this.syncCopies(c, dataId, date, key, chatId, mid, zt);
-        return ans(`Rimandato di ${SNOOZE_MIN} minuti`);
+        txt = this.doseText(c, m, date, time, today) + `\n\n⏰ Rimandato alle ${hmOf(at)}${who ? ' · ' + esc(who) : ''}`; kb = undefined;
+        answer = `Rimandato di ${SNOOZE_MIN} minuti`;
       }
+      // nel gruppo semplice i promemoria si cancellano: lo stato si vede nel pannello
+      if (k !== 'U') await this.delMirrorCopies(c, date, key, mset);
+      if (isMirror && pressedReminder) await this.del(chatId, mid);
+      await this.saveChat(dataId, c);
+      if (!isMirror) {
+        if (k === 'O') { const v = this.todayView(c); await this.edit(chatId, mid, v.text, v.kb); }
+        else await this.edit(chatId, mid, txt, kb);
+      }
+      await this.syncCopies(c, dataId, date, key, isMirror ? null : chatId, isMirror ? null : mid, txt, kb, mset);
+      await this.refreshPanels(acl, dataId, c);
+      if (low) await this.send(dataId, low);
+      return ans(answer);
     }
+    if (k === 'TP' && isMirror) { await this.mirrorTherapy(acl, chatId, c, acl.chats[dataId]); return ans(); }
+    if (k === 'OR' && isMirror) { await this.updatePanel(acl, chatId, c, true); return ans('Aggiornato'); }
     if (k === 'RQ' || k === 'RP' || k === 'RI') {
       const pids = [...new Set(c.meds.filter(m => !this.ended(m, today)).map(m => m.person))];
       let pid = r[0];
