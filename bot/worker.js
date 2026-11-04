@@ -58,6 +58,51 @@ function parseDays(s) {
   }
   return out.size ? [...out].sort() : null;
 }
+const MONTHS = { gen: 1, feb: 2, mar: 3, apr: 4, mag: 5, giu: 6, lug: 7, ago: 8, set: 9, ott: 10, nov: 11, dic: 12 };
+// Capisce: oggi, domani, "tra 5 giorni", "9/11", "9/11/2026", "9 novembre"
+function parseDate(text, today) {
+  const t = text.toLowerCase().trim();
+  if (/^oggi$/.test(t)) return today;
+  if (/^domani$/.test(t)) return addDays(today, 1).date;
+  let m = t.match(/(?:tra|fra|dopo|fra)\s+(\d{1,3})\s*g/);
+  if (m) return addDays(today, +m[1]).date;
+  let d, mo, y;
+  if ((m = t.match(/^(\d{1,2})\s*[\/.\-]\s*(\d{1,2})(?:\s*[\/.\-]\s*(\d{2,4}))?$/))) { d = +m[1]; mo = +m[2]; y = m[3] ? +m[3] : null; }
+  else if ((m = t.match(/^(\d{1,2})\s+([a-z]{3})[a-z]*(?:\s+(\d{4}))?$/)) && MONTHS[m[2]]) { d = +m[1]; mo = MONTHS[m[2]]; y = m[3] ? +m[3] : null; }
+  else return null;
+  if (y != null && y < 100) y += 2000;
+  const ty = +today.slice(0, 4);
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+  const mk = yy => `${yy}-${pad(mo)}-${pad(d)}`;
+  let out = mk(y || ty);
+  if (!y && out < addDays(today, -180).date) out = mk(ty + 1);
+  return out;
+}
+// Fine terapia: "7" o "7 giorni" = 7 giorni contando da `from`; altrimenti una data.
+function parseEnd(text, from, today) {
+  const m = text.trim().toLowerCase().match(/^(?:per\s+)?(?:altri\s+)?(\d{1,3})(?:\s*g(?:iorn[io])?)?$/);
+  if (m && +m[1] > 0) return addDays(from, +m[1] - 1).date;
+  return parseDate(text, today);
+}
+// Periodo: "dal 3/11 al 7/11", "3/11 - 7/11", "7" (giorni da oggi), "fino al 15/11", una sola data = ultimo giorno
+function parsePeriod(text, today) {
+  const t = text.toLowerCase().trim().replace(/^(?:dal|da)\s+/, '');
+  let a = null, b = null;
+  if (/^(?:fino\s+al?|al)\s+/.test(t)) { b = parseDate(t.replace(/^(?:fino\s+al?|al)\s+/, ''), today); a = today; return b && b >= today ? { start: a, end: b } : null; }
+  const parts = t.split(/\s+(?:al|a|fino al|fino a)\s+|\s*[–—]\s*|\s+-\s+/);
+  if (parts.length === 2) { a = parseDate(parts[0], today); b = parseDate(parts[1], today); }
+  else {
+    const ds = t.match(/\d{1,2}[\/.]\d{1,2}(?:[\/.]\d{2,4})?/g);
+    if (ds && ds.length === 2) { a = parseDate(ds[0], today); b = parseDate(ds[1], today); }
+    else {
+      const only = t.replace(/^(?:fino\s+al?|al)\s+/, '');
+      b = parseEnd(only, today, today); a = today;
+    }
+  }
+  if (!a || !b || b < a || b < today) return null;
+  return { start: a, end: b };
+}
+const isForever = s => /^(sempre|per sempre|nessuna|continua|cronico|senza fine|no)$/i.test(s.trim());
 const isSkip = s => /^(-|–|—|salta|saltare|per saltare|skip|no|niente|nessuno|non so|boh)$/i.test(s.trim().replace(/[.!]+$/, ''));
 const firstNum = s => { const m = s.match(/\d+/); return m ? parseInt(m[0], 10) : NaN; };
 const daysText = days => (!days.length || days.length === 7) ? 'tutti i giorni' : [1, 2, 3, 4, 5, 6, 0].filter(d => days.includes(d)).map(d => DOW_SHORT[d]).join(', ');
@@ -186,13 +231,21 @@ export class Store {
     for (const m of c.meds) {
       if (m.paused) continue;
       if (m.start && date < m.start) continue;
+      if (m.end && date > m.end) continue;
       if (m.days.length && m.days.length < 7 && !m.days.includes(dow)) continue;
-      for (const t of m.times) out.push({ m, time: t, key: m.id + '@' + t });
+      for (const t of this.timesOn(m, date)) out.push({ m, time: t, key: m.id + '@' + t });
     }
     return out.sort((a, b) => toMin(a.time) - toMin(b.time) || a.m.name.localeCompare(b.m.name));
   }
+  // Orari validi in una data: quelli di base, poi l'ultimo cambio programmato già iniziato.
+  timesOn(m, date) {
+    let t = m.times;
+    for (const p of [...(m.plan || [])].sort((a, b) => a.from < b.from ? -1 : 1)) if (p.from <= date) t = p.times;
+    return t;
+  }
+  ended(m, date) { return !!(m.end && date > m.end); }
   getLog(c, date, key) { return (c.log[date] || {})[key]; }
-  perDay(m) { return (m.qty || 1) * m.times.length * ((m.days.length && m.days.length < 7) ? m.days.length / 7 : 1); }
+  perDay(m) { return (m.qty || 1) * this.timesOn(m, romeParts().date).length * ((m.days.length && m.days.length < 7) ? m.days.length / 7 : 1); }
   logDose(c, date, key, m, s, who) {
     c.log[date] = c.log[date] || {};
     const prev = c.log[date][key];
@@ -207,7 +260,7 @@ export class Store {
   }
   // Avviso scorte: a 7 giorni e poi a 2 giorni, una volta per livello.
   stockAlert(c, m) {
-    if (m.stock == null || m.paused || !m.times.length) return null;
+    if (m.stock == null || m.paused || !m.times.length || this.ended(m, romeParts().date)) return null;
     const left = m.stock / this.perDay(m);
     const level = left <= LAST_STOCK_DAYS ? LAST_STOCK_DAYS : left <= LOW_STOCK_DAYS ? LOW_STOCK_DAYS : null;
     if (level == null || (m.lowLevel != null && m.lowLevel <= level)) return null;
@@ -268,6 +321,11 @@ export class Store {
       if (n.min >= toMin(STOCK_CHECK_HM) && n.min - toMin(STOCK_CHECK_HM) <= 20 && c.stockCheck !== n.date) {
         c.stockCheck = n.date; changed = true;
         for (const m of c.meds) { const a = this.stockAlert(c, m); if (a) await this.send(chatId, a); }
+        for (const m of c.meds) if (this.ended(m, n.date) && !m.endNotified) {
+          m.endNotified = true;
+          await this.send(chatId, `🏁 <b>Terapia terminata</b>\n${esc(m.name)}${this.pp(c, m.person)}: l'ultimo giorno era ${fmtDate(m.end)}, non mando più promemoria.`,
+            { inline_keyboard: [[{ text: '🗑 Elimina il farmaco', callback_data: 'MD|' + m.id }, { text: '📆 Prolunga', callback_data: 'MT|' + m.id }]] });
+        }
       }
       // pulizia
       const keepSent = addDays(n.date, -1).date, keepLog = addDays(n.date, -90).date;
@@ -380,14 +438,26 @@ export class Store {
       case 'days': {
         const ds = parseDays(text);
         if (!ds) return this.ask(chatId, 'Non ho capito i giorni. Scrivili così: <code>lun mer ven</code>', mid, 'Es. lun mer ven');
-        d.days = ds.length === 7 ? [] : ds; fl.step = 'stock'; await save();
+        d.days = ds.length === 7 ? [] : ds; fl.step = 'dur'; await save();
+        return this.askDur(chatId, mid);
+      }
+      case 'dur': {
+        const today = romeParts().date;
+        if (isForever(text) || isSkip(text)) { d.end = ''; d.start = ''; }
+        else {
+          const pr = parsePeriod(text, today);
+          if (!pr) return this.ask(chatId, 'Non ho capito il periodo 🤔 Scrivi ad esempio <code>dal 3/11 al 7/11</code>, oppure il numero di giorni (<code>7</code>), oppure <b>-</b> se è cronica.', mid, 'Es. dal 3/11 al 7/11');
+          d.start = pr.start; d.end = pr.end;
+        }
+        fl.step = 'stock'; await save();
+        if (d.end) await this.send(chatId, `📆 Periodo: dal <b>${fmtDate(d.start)}</b> al <b>${fmtDate(d.end)}</b>`);
         return this.askStock(chatId, mid);
       }
       case 'stock': {
         let st = null;
         if (!isSkip(text)) { st = firstNum(text); if (isNaN(st) || st < 0) return this.ask(chatId, 'Scrivi solo il numero di compresse che hai, ad esempio <code>28</code>. Per saltare, scrivi <b>-</b> oppure <b>salta</b>.', mid, 'Es. 28'); }
         const today = romeParts().date;
-        const m = { id: rid(), person: d.person, name: d.name, dose: d.dose || '', times: d.times, days: d.days || [], qty: 1, stock: st, start: today, paused: false, lowLevel: null };
+        const m = { id: rid(), person: d.person, name: d.name, dose: d.dose || '', times: d.times, days: d.days || [], qty: 1, stock: st, start: d.start && d.start > today ? d.start : today, end: d.end || '', paused: false, lowLevel: null };
         c.meds.push(m); delete c.flows[uid]; await save();
         return this.send(chatId, `✅ Salvato!\n\n${this.medText(c, m)}\n\nTi avviserò a ogni orario.`, { remove_keyboard: true, selective: true });
       }
@@ -402,6 +472,39 @@ export class Store {
         delete c.flows[uid]; await save();
         const v = this.medDetail(c, m);
         return this.send(chatId, `✅ Ora è di ${esc(p.name)}.\n\n` + v.text, v.kb);
+      }
+      case 'pfrom': {
+        const m = c.meds.find(x => x.id === d.med); const today = romeParts().date;
+        if (!m) { delete c.flows[uid]; await save(); return this.send(chatId, 'Il farmaco non esiste più.'); }
+        const f = parseDate(text, today);
+        if (!f || f <= today) return this.ask(chatId, 'Scrivi un giorno futuro: una data (es. <code>8/11</code>) oppure <code>tra 4 giorni</code>.', mid, 'Es. 8/11');
+        d.from = f; fl.step = 'ptimes'; await save();
+        return this.ask(chatId, `Dal <b>${fmtDate(f)}</b>, a che ore? Scrivi tutti i nuovi orari, es. <code>8 14 20</code>.`, mid, 'Es. 8 14 20');
+      }
+      case 'ptimes': {
+        const m = c.meds.find(x => x.id === d.med);
+        if (!m) { delete c.flows[uid]; await save(); return this.send(chatId, 'Il farmaco non esiste più.'); }
+        const t = parseTimes(text);
+        if (!t) return this.ask(chatId, 'Non ho capito gli orari 🤔 Riprova, ad esempio <code>8 14 20</code>.', mid, 'Es. 8 14 20');
+        m.plan = (m.plan || []).filter(p => p.from !== d.from); m.plan.push({ from: d.from, times: t });
+        m.plan.sort((a, b) => a.from < b.from ? -1 : 1);
+        delete c.flows[uid]; await save();
+        const v = this.planView(c, m);
+        return this.send(chatId, '✅ Cambio programmato.\n\n' + v.text, v.kb);
+      }
+      case 'pend': {
+        const m = c.meds.find(x => x.id === d.med); const today = romeParts().date;
+        if (!m) { delete c.flows[uid]; await save(); return this.send(chatId, 'Il farmaco non esiste più.'); }
+        if (isForever(text) || isSkip(text)) m.end = '';
+        else {
+          const e = parseDate(text.replace(/^(?:fino\s+al?|al)\s+/i, ''), today);
+          if (!e || e < today) return this.ask(chatId, 'Scrivi l\'ultimo giorno di terapia (es. <code>11/11</code>), oppure <b>-</b> per toglierlo (terapia cronica).', mid, 'Es. 11/11');
+          m.end = e;
+        }
+        delete m.endNotified;
+        delete c.flows[uid]; await save();
+        const v = this.planView(c, m);
+        return this.send(chatId, '✅ Fatto.\n\n' + v.text, v.kb);
       }
       case 'edit': {
         const m = c.meds.find(x => x.id === d.med);
@@ -433,13 +536,18 @@ export class Store {
       }
     }
   }
+  askDur(chatId, mid) {
+    return this.ask(chatId, 'Periodo di terapia?\nScrivi <code>dal 3/11 al 7/11</code>, oppure il numero di giorni (es. <code>7</code>).\nSe è una terapia <b>cronica</b>, scrivi <b>-</b>', mid, 'Es. dal 3/11 al 7/11 oppure -');
+  }
   askStock(chatId, mid) {
     return this.ask(chatId, 'Quante compresse (o unità) hai adesso? Le scalo a ogni dose e ti avviso quando stanno per finire.\nScrivi solo il numero (es. <code>50</code>), oppure <b>salta</b>.', mid, 'Es. 28');
   }
 
   /* ---------- viste ---------- */
   medText(c, m) {
-    return `<b>${esc(m.name)}</b>${m.dose ? ' ' + esc(m.dose) : ''}${m.paused ? ' ⏸ <i>in pausa</i>' : ''}${this.multi(c) ? '\n👤 ' + esc(this.person(c, m.person)) : ''}\n🕐 ${m.times.join(', ')} · ${daysText(m.days)}${m.stock != null ? `\n📦 ${m.stock} unità` : ''}`;
+    const today = romeParts().date, next = (m.plan || []).filter(p => p.from > today).sort((a, b) => a.from < b.from ? -1 : 1)[0];
+    const extra = (next ? `\n🔁 dal ${fmtDate(next.from)}: ${next.times.join(', ')}` : '') + (m.end ? `\n🏁 ${this.ended(m, today) ? 'terminata il' : 'fino al'} ${fmtDate(m.end)}` : '');
+    return `<b>${esc(m.name)}</b>${m.dose ? ' ' + esc(m.dose) : ''}${m.paused ? ' ⏸ <i>in pausa</i>' : ''}${this.multi(c) ? '\n👤 ' + esc(this.person(c, m.person)) : ''}\n🕐 ${m.times.join(', ')} · ${daysText(m.days)}${m.stock != null ? `\n📦 ${m.stock} unità` : ''}` + extra;
   }
   exportView(c, title) {
     if (!c.meds.length) return 'Non ci sono farmaci da esportare.';
@@ -484,20 +592,34 @@ export class Store {
     text += '\nTocca un farmaco per modificarlo:';
     return { text, kb: { inline_keyboard: ms.map(m => [{ text: `${m.paused ? '⏸ ' : ''}${m.name}${this.pdot(c, m.person, true)}`.slice(0, 60), callback_data: 'MM|' + m.id }]) } };
   }
+  planView(c, m) {
+    const today = romeParts().date;
+    const rows = [{ from: m.start || today, times: m.times }, ...[...(m.plan || [])].sort((a, b) => a.from < b.from ? -1 : 1)];
+    let t = `📆 <b>Programma di ${esc(m.name)}</b>\n`;
+    for (const p of rows) t += `\n• dal ${fmtDate(p.from)}: ${p.times.join(', ')} (${p.times.length} al giorno)`;
+    t += `\n\n🏁 ${m.end ? 'Ultimo giorno: <b>' + fmtDate(m.end) + '</b>' + (this.ended(m, today) ? ' (terminata)' : '') : 'Nessuna data di fine'}`;
+    const kb = [
+      [{ text: '➕ Cambio orari da una data', callback_data: 'MTC|' + m.id }],
+      [{ text: '🏁 Fine terapia', callback_data: 'MTE|' + m.id }]
+    ];
+    if ((m.plan || []).length || m.end) kb.push([{ text: '🧹 Togli cambi e fine', callback_data: 'MTX|' + m.id }]);
+    kb.push([{ text: '⬅️ Farmaco', callback_data: 'MM|' + m.id }]);
+    return { text: t, kb: { inline_keyboard: kb } };
+  }
   medDetail(c, m) {
     return {
       text: this.medText(c, m), kb: {
         inline_keyboard: [
           [{ text: '✏️ Nome', callback_data: 'ME|' + m.id + '|name' }, { text: '✏️ Dosaggio', callback_data: 'ME|' + m.id + '|dose' }, { text: '🕐 Orari', callback_data: 'ME|' + m.id + '|times' }],
           [{ text: '👤 Persona', callback_data: 'MW|' + m.id }, { text: m.paused ? '▶️ Riprendi' : '⏸ Pausa', callback_data: 'MP|' + m.id }, { text: '📦 Scorte', callback_data: 'MS|' + m.id }],
-          [{ text: '🗑 Elimina', callback_data: 'MD|' + m.id }, { text: '⬅️ Elenco', callback_data: 'ML' }]
+          [{ text: '📆 Programma', callback_data: 'MT|' + m.id }, { text: '🗑 Elimina', callback_data: 'MD|' + m.id }, { text: '⬅️ Elenco', callback_data: 'ML' }]
         ]
       }
     };
   }
   stockView(c) {
     if (!c.meds.length) return 'Non ci sono ancora farmaci.';
-    const daysLeft = m => (m.stock == null || !m.times.length) ? Infinity : m.stock / this.perDay(m);
+    const daysLeft = m => (m.stock == null || !m.times.length || this.ended(m, romeParts().date)) ? Infinity : m.stock / this.perDay(m);
     const sorted = [...c.meds].sort((a, b) => daysLeft(a) - daysLeft(b) || a.name.localeCompare(b.name));
     const lines = sorted.map(m => {
       if (m.stock == null) return `⚪ ${esc(m.name)}${this.pp(c, m.person)}: non conteggiate`;
@@ -631,7 +753,7 @@ export class Store {
       }
       if (k === 'D') {
         if (fl.step !== 'days') return ans();
-        if (r[0] === 'all') { fl.d.days = []; fl.step = 'stock'; await this.saveChat(chatId, c); await this.edit(chatId, mid, `Orari: <b>${fl.d.times.join(', ')}</b>, tutti i giorni.`); await this.askStock(chatId, null); }
+        if (r[0] === 'all') { fl.d.days = []; fl.step = 'dur'; await this.saveChat(chatId, c); await this.edit(chatId, mid, `Orari: <b>${fl.d.times.join(', ')}</b>, tutti i giorni.`); await this.askDur(chatId, null); }
         else { await this.edit(chatId, mid, `Orari: <b>${fl.d.times.join(', ')}</b>`); await this.ask(chatId, 'Scrivi i giorni, ad esempio: <code>lun mer ven</code>', null, 'Es. lun mer ven'); }
         return ans();
       }
@@ -640,9 +762,25 @@ export class Store {
     // gestione farmaci
     if (k === 'ML') { const v = this.medsView(c); await this.edit(chatId, mid, v.text, v.kb); return ans(); }
     const m = c.meds.find(x => x.id === r[0]);
-    if (['MM', 'MP', 'MS', 'MD', 'MDY', 'ME', 'MW', 'MWP', 'MWN'].includes(k) && !m) { const v = this.medsView(c); await this.edit(chatId, mid, v.text, v.kb); return ans('Farmaco non trovato'); }
+    if (['MM', 'MP', 'MS', 'MD', 'MDY', 'ME', 'MW', 'MWP', 'MWN', 'MT', 'MTC', 'MTE', 'MTX'].includes(k) && !m) { const v = this.medsView(c); await this.edit(chatId, mid, v.text, v.kb); return ans('Farmaco non trovato'); }
     if (k === 'MM') { const v = this.medDetail(c, m); await this.edit(chatId, mid, v.text, v.kb); return ans(); }
     if (k === 'MP') { m.paused = !m.paused; await this.saveChat(chatId, c); const v = this.medDetail(c, m); await this.edit(chatId, mid, v.text, v.kb); return ans(m.paused ? 'In pausa: niente promemoria' : 'Promemoria riattivati'); }
+    if (k === 'MT') { const v = this.planView(c, m); await this.edit(chatId, mid, v.text, v.kb); return ans(); }
+    if (k === 'MTC') {
+      c.flows[uid] = { step: 'pfrom', d: { med: m.id } }; await this.saveChat(chatId, c);
+      await this.ask(chatId, `Da quale giorno cambiano gli orari di <b>${esc(m.name)}</b>?\nScrivi una data (es. <code>8/11</code>) oppure <code>tra 4 giorni</code>.`, null, 'Es. 8/11');
+      return ans();
+    }
+    if (k === 'MTE') {
+      c.flows[uid] = { step: 'pend', d: { med: m.id } }; await this.saveChat(chatId, c);
+      await this.ask(chatId, `Qual è l'ultimo giorno di terapia di <b>${esc(m.name)}</b>?${m.end ? ` (ora: ${fmtDate(m.end)})` : ''}\nScrivi una data (es. <code>11/11</code>), oppure <b>-</b> se è cronica.`, null, 'Es. 11/11');
+      return ans();
+    }
+    if (k === 'MTX') {
+      m.plan = []; m.end = ''; delete m.endNotified; await this.saveChat(chatId, c);
+      const v = this.planView(c, m); await this.edit(chatId, mid, '🧹 Cambi e fine tolti.\n\n' + v.text, v.kb);
+      return ans();
+    }
     if (k === 'MW') {
       await this.edit(chatId, mid, `Di chi è <b>${esc(m.name)}</b>?`, { inline_keyboard: [
         ...c.persons.filter(p => p.id !== m.person).map(p => [{ text: p.name, callback_data: `MWP|${m.id}|${p.id}` }]),
