@@ -334,10 +334,22 @@ export class Store {
 
   /* ---------- aggiunta guidata ---------- */
   async startAdd(chatId, c, uid) {
+    // Una sola persona nella chat: niente domanda, il farmaco è per lei.
+    if (c.persons.length === 1) {
+      const p = c.persons[0];
+      c.flows[uid] = { step: 'name', d: { person: p.id } };
+      await this.saveChat(chatId, c);
+      await this.send(chatId, `💊 <b>Nuovo farmaco</b> per ${esc(p.name)}`, { inline_keyboard: [[{ text: '👤 È per un\'altra persona', callback_data: 'PC' }]] });
+      return this.ask(chatId, 'Come si chiama il farmaco?', null, 'Es. Ramipril');
+    }
+    return this.personPicker(chatId, c, uid);
+  }
+  async personPicker(chatId, c, uid, editMid) {
     c.flows[uid] = { step: 'person', d: {} };
     await this.saveChat(chatId, c);
     const kb = c.persons.map(p => [{ text: p.name, callback_data: 'P|' + p.id }]);
     kb.push([{ text: '➕ Nuova persona', callback_data: 'PN' }], [{ text: 'Annulla', callback_data: 'X' }]);
+    if (editMid) return this.edit(chatId, editMid, '💊 <b>Nuovo farmaco</b>\nPer chi è?', { inline_keyboard: kb });
     return this.send(chatId, '💊 <b>Nuovo farmaco</b>\nPer chi è?', { inline_keyboard: kb });
   }
   async flowInput(chatId, c, uid, fl, text, mid) {
@@ -596,6 +608,11 @@ export class Store {
     // aggiunta guidata
     const fl = c.flows[uid];
     if (k === 'X') { delete c.flows[uid]; await this.saveChat(chatId, c); await this.edit(chatId, mid, 'Operazione annullata.'); return ans(); }
+    if (k === 'PC') {
+      if (!fl) return ans('Ricomincia con /aggiungi');
+      await this.personPicker(chatId, c, uid, mid);
+      return ans();
+    }
     if (k === 'P' || k === 'PN' || k === 'D') {
       if (!fl) return ans('Ricomincia con /aggiungi');
       if (k === 'PN') {
