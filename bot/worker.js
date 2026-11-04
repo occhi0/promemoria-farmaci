@@ -292,6 +292,13 @@ export class Store {
     return { inline_keyboard: [[{ text: '✅ Preso', callback_data: 'T|' + d }], [{ text: `⏰ ${SNOOZE_MIN} min`, callback_data: 'Z|' + d }, { text: '⏭ Salta', callback_data: 'S|' + d }]] };
   }
 
+  // Pulsanti fissi del gruppo semplice. Iniziano con "/" così il bot li riceve anche con la privacy dei gruppi attiva.
+  mirrorKb() {
+    return { keyboard: [[{ text: '/oggi 📅 Dosi di oggi' }, { text: '/terapia 🩺 Terapia' }]], resize_keyboard: true, is_persistent: true };
+  }
+  async sendMirrorKb(chatId) {
+    return this.send(chatId, '👇 Qui sotto trovi sempre i pulsanti <b>📅 Dosi di oggi</b> e <b>🩺 Terapia</b>.', this.mirrorKb());
+  }
   mirrorsOf(acl, src) { return Object.keys(acl.mirrors || {}).filter(k => acl.mirrors[k] === src); }
   // aggiorna tutte le copie del promemoria (gruppo principale e gruppo semplice), tranne quella già modificata
   async syncCopies(c, srcId, date, key, exceptChat, exceptMid, text, kb) {
@@ -381,8 +388,9 @@ export class Store {
     acl.mirrors = acl.mirrors || {};
     if (acl.mirrors[chatId]) {
       const src = acl.mirrors[chatId];
-      if ((cmd === '/oggi' || cmd === '/terapia') && !(acl.mcv || {})[chatId]) {
-        acl.mcv = acl.mcv || {}; acl.mcv[chatId] = 2; await this.saveAcl(acl);
+      if ((cmd === '/oggi' || cmd === '/terapia') && ((acl.mcv || {})[chatId] || 0) < 3) {
+        acl.mcv = acl.mcv || {}; acl.mcv[chatId] = 3; await this.saveAcl(acl);
+        await this.sendMirrorKb(chatId);
         await tg(this.env, 'setMyCommands', { commands: [{ command: 'oggi', description: 'Dosi di oggi' }, { command: 'terapia', description: 'Elenco della terapia per il medico' }], scope: { type: 'chat', chat_id: Number(chatId) } });
       }
       if (cmd === '/oggi') { const v = this.todayView(await this.chat(src)); return this.send(chatId, v.text, v.kb); }
@@ -390,7 +398,7 @@ export class Store {
       if (cmd === '/scollega' && uid === acl.admin) {
         delete acl.mirrors[chatId]; await this.saveAcl(acl);
         await tg(this.env, 'deleteMyCommands', { scope: { type: 'chat', chat_id: Number(chatId) } });
-        return this.send(chatId, 'Gruppo scollegato: qui non arriveranno più promemoria.');
+        return this.send(chatId, 'Gruppo scollegato: qui non arriveranno più promemoria.', { remove_keyboard: true });
       }
       return;
     }
@@ -892,9 +900,10 @@ export class Store {
       if (!acl.chats[src] || src === chatId) return ans();
       acl.mirrors = acl.mirrors || {}; acl.mirrors[chatId] = src; delete acl.chats[chatId];
       await this.saveAcl(acl);
-      acl.mcv = acl.mcv || {}; acl.mcv[chatId] = 2; await this.saveAcl(acl);
+      acl.mcv = acl.mcv || {}; acl.mcv[chatId] = 3; await this.saveAcl(acl);
       await tg(this.env, 'setMyCommands', { commands: [{ command: 'oggi', description: 'Dosi di oggi' }, { command: 'terapia', description: 'Elenco della terapia per il medico' }], scope: { type: 'chat', chat_id: Number(chatId) } });
       await this.edit(chatId, mid, `✅ Fatto! Qui arriveranno i promemoria di <b>${esc(src === acl.admin ? 'chat privata' : acl.chats[src])}</b>.\n\nQuando arriva un messaggio basta toccare:\n✅ <b>Preso</b> quando la dose è stata data\n⏰ <b>10 min</b> per ricordarlo più tardi\n⏭ <b>Salta</b> se oggi non va data\n\nPer vedere le dosi della giornata: /oggi\nPer l'elenco della terapia da mostrare al medico: /terapia`);
+      await this.sendMirrorKb(chatId);
       return ans('Collegato');
     }
     const dataId = (acl.mirrors || {})[chatId] || chatId;   // nei gruppi semplici i dati sono quelli del gruppo principale
