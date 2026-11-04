@@ -434,13 +434,25 @@ export class Store {
         const t = parseTimes(text);
         if (!t) return this.ask(chatId, 'Non ho capito gli orari 🤔 Riprova, ad esempio <code>8 20</code> oppure <code>07:30 19:30</code>.', mid, 'Es. 8 20');
         d.times = t; fl.step = 'days'; await save();
-        return this.send(chatId, `Orari: <b>${t.join(', ')}</b>\nIn quali giorni?`, {
-          inline_keyboard: [[{ text: 'Tutti i giorni', callback_data: 'D|all' }], [{ text: 'Solo alcuni giorni', callback_data: 'D|some' }]]
+        return this.send(chatId, `Orari: <b>${t.join(', ')}</b>\nVa preso tutti i giorni?\n<i>(Il periodo dal… al… te lo chiedo subito dopo.)</i>`, {
+          inline_keyboard: [[{ text: '✅ Sì, tutti i giorni', callback_data: 'D|all' }], [{ text: '📅 Solo certi giorni della settimana (es. il lunedì)', callback_data: 'D|some' }]]
         });
       }
       case 'days': {
+        const today = romeParts().date;
+        if (/^(tutti|tutti i giorni|ogni giorno|sempre|si|sì)$/i.test(text.trim())) {
+          d.days = []; fl.step = 'dur'; await save(); return this.askDur(chatId, mid);
+        }
+        if (/\d/.test(text)) { // ha scritto delle date: è il periodo, e il farmaco va preso tutti i giorni
+          const pr = parsePeriod(text, today);
+          if (pr) {
+            d.days = []; d.start = pr.start; d.end = pr.end; fl.step = 'stock'; await save();
+            await this.send(chatId, `Ho capito: <b>tutti i giorni</b>, dal <b>${fmtDate(pr.start)}</b> al <b>${fmtDate(pr.end)}</b>.`);
+            return this.askStock(chatId, mid);
+          }
+        }
         const ds = parseDays(text);
-        if (!ds) return this.ask(chatId, 'Non ho capito i giorni. Scrivili così: <code>lun mer ven</code>', mid, 'Es. lun mer ven');
+        if (!ds) return this.ask(chatId, 'Qui servono i giorni della settimana, ad esempio <code>lun mer ven</code>, oppure <b>tutti</b>.\nIl periodo dal… al… te lo chiedo alla domanda successiva.', mid, 'Es. lun mer ven');
         d.days = ds.length === 7 ? [] : ds; fl.step = 'dur'; await save();
         return this.askDur(chatId, mid);
       }
@@ -812,7 +824,7 @@ export class Store {
       if (k === 'D') {
         if (fl.step !== 'days') return ans();
         if (r[0] === 'all') { fl.d.days = []; fl.step = 'dur'; await this.saveChat(chatId, c); await this.edit(chatId, mid, `Orari: <b>${fl.d.times.join(', ')}</b>, tutti i giorni.`); await this.askDur(chatId, null); }
-        else { await this.edit(chatId, mid, `Orari: <b>${fl.d.times.join(', ')}</b>`); await this.ask(chatId, 'Scrivi i giorni, ad esempio: <code>lun mer ven</code>', null, 'Es. lun mer ven'); }
+        else { await this.edit(chatId, mid, `Orari: <b>${fl.d.times.join(', ')}</b>`); await this.ask(chatId, 'In quali giorni della settimana? Ad esempio <code>lun</code> oppure <code>lun mer ven</code>.\nSe va preso tutti i giorni scrivi <b>tutti</b>.', null, 'Es. lun mer ven'); }
         return ans();
       }
     }
