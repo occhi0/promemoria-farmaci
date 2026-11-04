@@ -480,7 +480,9 @@ export class Store {
   }
   stockView(c) {
     if (!c.meds.length) return 'Non ci sono ancora farmaci.';
-    const lines = c.meds.map(m => {
+    const daysLeft = m => (m.stock == null || !m.times.length) ? Infinity : m.stock / this.perDay(m);
+    const sorted = [...c.meds].sort((a, b) => daysLeft(a) - daysLeft(b) || a.name.localeCompare(b.name));
+    const lines = sorted.map(m => {
       if (m.stock == null) return `• ${esc(m.name)} (${esc(this.person(c, m.person))}): non conteggiate`;
       const left = m.stock / this.perDay(m);
       return `${left <= LOW_STOCK_DAYS ? '⚠️' : '•'} ${esc(m.name)} (${esc(this.person(c, m.person))}): <b>${m.stock}</b> unità, circa ${Math.floor(left)} giorni`;
