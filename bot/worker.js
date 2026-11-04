@@ -377,11 +377,16 @@ export class Store {
       await this.saveAcl(acl);
       return this.send(chatId, `Ciao ${esc(name)}! Questo bot ora è tuo: nessun altro potrà usarlo, tranne i gruppi in cui lo aggiungi tu.\n\n${HELP}`);
     }
-    // Gruppo "solo promemoria": risponde solo a /oggi (e a /scollega dell'amministratore)
+    // Gruppo "solo promemoria": risponde solo a /oggi e /terapia (e a /scollega dell'amministratore)
     acl.mirrors = acl.mirrors || {};
     if (acl.mirrors[chatId]) {
       const src = acl.mirrors[chatId];
+      if ((cmd === '/oggi' || cmd === '/terapia') && !(acl.mcv || {})[chatId]) {
+        acl.mcv = acl.mcv || {}; acl.mcv[chatId] = 2; await this.saveAcl(acl);
+        await tg(this.env, 'setMyCommands', { commands: [{ command: 'oggi', description: 'Dosi di oggi' }, { command: 'terapia', description: 'Elenco della terapia per il medico' }], scope: { type: 'chat', chat_id: Number(chatId) } });
+      }
       if (cmd === '/oggi') { const v = this.todayView(await this.chat(src)); return this.send(chatId, v.text, v.kb); }
+      if (cmd === '/terapia') return this.sendTherapy(chatId, await this.chat(src), acl.chats[src]);
       if (cmd === '/scollega' && uid === acl.admin) {
         delete acl.mirrors[chatId]; await this.saveAcl(acl);
         await tg(this.env, 'deleteMyCommands', { scope: { type: 'chat', chat_id: Number(chatId) } });
@@ -420,16 +425,7 @@ export class Store {
         }
         case '/storico': return this.send(chatId, this.historyView(c));
         case '/esporta': return this.send(chatId, this.exportView(c, msg.chat.title));
-        case '/terapia': {
-          const t = this.therapyView(c, msg.chat.title);
-          // versione per WhatsApp: *grassetto* al posto dei tag HTML
-          const plain = t.replace(/<b>(.*?)<\/b>/g, '*$1*').replace(/<[^>]+>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
-          const url = 'https://wa.me/?text=' + encodeURIComponent(plain);
-          const ok = c.meds.length && url.length <= 4000;
-          await this.send(chatId, t, ok ? { inline_keyboard: [[{ text: '📤 Invia su WhatsApp', url }]] } : undefined);
-          if (c.meds.length && !ok) await this.send(chatId, "L'elenco è troppo lungo per il pulsante WhatsApp: tieni premuto il messaggio, tocca Copia e incollalo in WhatsApp.");
-          return;
-        }
+        case '/terapia': return this.sendTherapy(chatId, c, msg.chat.title);
         case '/trasferisci': {
           if (priv) return this.send(chatId, 'Questo comando si usa dentro un gruppo: sposta lì i farmaci di una persona dalla tua chat privata.');
           if (uid !== acl.admin) return this.send(chatId, 'Solo chi ha creato il bot può trasferire i farmaci.');
@@ -657,6 +653,15 @@ export class Store {
     const today = romeParts().date, next = (m.plan || []).filter(p => p.from > today).sort((a, b) => a.from < b.from ? -1 : 1)[0];
     const extra = (next ? `\n🔁 dal ${fmtDate(next.from)}: ${next.times.join(', ')}` : '') + (m.end ? `\n🏁 ${this.ended(m, today) ? 'terminata il' : 'fino al'} ${fmtDate(m.end)}` : '');
     return `<b>${esc(m.name)}</b>${m.dose ? ' ' + esc(m.dose) : ''}${m.paused ? ' ⏸ <i>in pausa</i>' : ''}${this.multi(c) ? '\n👤 ' + esc(this.person(c, m.person)) : ''}\n🕐 ${m.times.join(', ')} · ${daysText(m.days)}${m.stock != null ? `\n📦 ${m.stock} unità` : ''}` + extra;
+  }
+  async sendTherapy(chatId, c, title) {
+    const t = this.therapyView(c, title);
+    // versione per WhatsApp: *grassetto* al posto dei tag HTML
+    const plain = t.replace(/<b>(.*?)<\/b>/g, '*$1*').replace(/<[^>]+>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+    const url = 'https://wa.me/?text=' + encodeURIComponent(plain);
+    const ok = c.meds.length && url.length <= 4000;
+    await this.send(chatId, t, ok ? { inline_keyboard: [[{ text: '📤 Invia su WhatsApp', url }]] } : undefined);
+    if (c.meds.length && !ok) await this.send(chatId, "L'elenco è troppo lungo per il pulsante WhatsApp: tieni premuto il messaggio, tocca Copia e incollalo in WhatsApp.");
   }
   // Copia completa di sicurezza: tutto quello che serve per reinserire i farmaci.
   exportView(c, title) {
@@ -887,8 +892,9 @@ export class Store {
       if (!acl.chats[src] || src === chatId) return ans();
       acl.mirrors = acl.mirrors || {}; acl.mirrors[chatId] = src; delete acl.chats[chatId];
       await this.saveAcl(acl);
-      await tg(this.env, 'setMyCommands', { commands: [{ command: 'oggi', description: 'Dosi di oggi' }], scope: { type: 'chat', chat_id: Number(chatId) } });
-      await this.edit(chatId, mid, `✅ Fatto! Qui arriveranno i promemoria di <b>${esc(src === acl.admin ? 'chat privata' : acl.chats[src])}</b>.\n\nQuando arriva un messaggio basta toccare:\n✅ <b>Preso</b> quando la dose è stata data\n⏰ <b>10 min</b> per ricordarlo più tardi\n⏭ <b>Salta</b> se oggi non va data\n\nPer vedere le dosi della giornata: /oggi`);
+      acl.mcv = acl.mcv || {}; acl.mcv[chatId] = 2; await this.saveAcl(acl);
+      await tg(this.env, 'setMyCommands', { commands: [{ command: 'oggi', description: 'Dosi di oggi' }, { command: 'terapia', description: 'Elenco della terapia per il medico' }], scope: { type: 'chat', chat_id: Number(chatId) } });
+      await this.edit(chatId, mid, `✅ Fatto! Qui arriveranno i promemoria di <b>${esc(src === acl.admin ? 'chat privata' : acl.chats[src])}</b>.\n\nQuando arriva un messaggio basta toccare:\n✅ <b>Preso</b> quando la dose è stata data\n⏰ <b>10 min</b> per ricordarlo più tardi\n⏭ <b>Salta</b> se oggi non va data\n\nPer vedere le dosi della giornata: /oggi\nPer l'elenco della terapia da mostrare al medico: /terapia`);
       return ans('Collegato');
     }
     const dataId = (acl.mirrors || {})[chatId] || chatId;   // nei gruppi semplici i dati sono quelli del gruppo principale
