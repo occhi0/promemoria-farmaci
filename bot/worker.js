@@ -545,6 +545,14 @@ export class Store {
           if (!/^[A-Z0-9]{16}$/.test(cf)) return this.ask(chatId, 'Il codice fiscale ha 16 caratteri (lettere e numeri). Riprova, oppure scrivi <b>-</b> per saltare.', mid, 'Codice fiscale');
           p.info.cf = cf;
         }
+        fl.step = 'pinfo_to'; await save();
+        return this.askTo(chatId, mid);
+      }
+      case 'pinfo_to': {
+        const p = c.persons.find(x => x.id === d.pid);
+        if (!p) { delete c.flows[uid]; await save(); return this.send(chatId, 'Persona non trovata.'); }
+        p.info = p.info || {};
+        p.info.to = isSkip(text) ? '' : text.slice(0, 40);
         this.startReq(c, uid, p.id); await save();
         const v = this.reqView(c, uid, d.who);
         return this.send(chatId, '✅ Dati salvati.\n\n' + v.text, v.kb);
@@ -769,15 +777,18 @@ export class Store {
     const left = m => (m.stock == null || !m.times.length) ? null : Math.floor(m.stock / this.perDay(m));
     const info = p.info || {};
     const chosen = uniq.filter(m => rq.sel.includes(m.id));
-    let wa = `Buongiorno, vorrei richiedere ${chosen.length === 1 ? 'la ricetta' : 'le ricette'} per:\n*${info.full || p.name}*`;
+    let wa = `Buongiorno${info.to ? ' ' + info.to : ''}, vorrei richiedere ${chosen.length === 1 ? 'la ricetta' : 'le ricette'} per:\n*${info.full || p.name}*`;
     if (info.birth) wa += `\nData di nascita: ${info.birth}`;
     if (info.cf) wa += `\nC.F. ${info.cf}`;
-    wa += '\n\n' + chosen.map(m => `• ${m.name}${m.dose ? ' ' + m.dose : ''}`).join('\n') + `\n\nGrazie${who ? ',\n' + who : ''}`;
-    const text = `📤 <b>Richiesta ricette</b> — ${esc(info.full || p.name)}${info.birth ? '\nData di nascita: ' + esc(info.birth) : ''}${info.cf ? '\nC.F. ' + esc(info.cf) : ''}\n\nTocca i farmaci per sceglierli (✅ = da richiedere). Sono già selezionati quelli con ${YELLOW_DAYS} giorni o meno.`;
+    wa += '\n' + chosen.map(m => `• ${m.name}${m.dose ? ' ' + m.dose : ''}`).join('\n') + `\nGrazie${who ? ',\n' + who : ''}`;
+    const text = `📤 <b>Richiesta ricette</b> — ${esc(info.full || p.name)}${info.to ? '\nDestinatario: ' + esc(info.to) : ''}${info.birth ? '\nData di nascita: ' + esc(info.birth) : ''}${info.cf ? '\nC.F. ' + esc(info.cf) : ''}\n\nTocca i farmaci per sceglierli (✅ = da richiedere). Sono già selezionati quelli con ${YELLOW_DAYS} giorni o meno.`;
     const kb = uniq.map(m => { const d = left(m); return [{ text: `${rq.sel.includes(m.id) ? '✅' : '⬜'} ${m.name}${m.dose ? ' ' + m.dose : ''}${d != null ? ` · ${d} gg` : ''}`.slice(0, 60), callback_data: 'RT|' + m.id }]; });
     if (chosen.length) kb.push([{ text: `📤 Invia su WhatsApp (${chosen.length})`, url: 'https://wa.me/?text=' + encodeURIComponent(wa) }]);
     kb.push([{ text: '✏️ Dati assistita', callback_data: 'RI|' + p.id }, { text: 'Chiudi', callback_data: 'RX' }]);
     return { text, kb: { inline_keyboard: kb } };
+  }
+  askTo(chatId, mid) {
+    return this.ask(chatId, 'A chi mandi la richiesta? Scrivi il nome per il saluto (es. <code>Vincenzo</code>), così il messaggio inizia con "Buongiorno Vincenzo".\nScrivi <b>-</b> per un semplice "Buongiorno".', mid, 'Es. Vincenzo');
   }
   startReq(c, uid, pid) {
     const today = romeParts().date;
@@ -890,6 +901,11 @@ export class Store {
       }
       const p = c.persons.find(x => x.id === pid);
       if (!p) return ans();
+      if (k !== 'RI' && p.info && p.info.full && p.info.to === undefined) {
+        c.flows[uid] = { step: 'pinfo_to', d: { pid: p.id, who } }; await this.saveChat(chatId, c);
+        await this.askTo(chatId, null);
+        return ans();
+      }
       if (k === 'RI' || !(p.info && p.info.full)) {
         c.flows[uid] = { step: 'pinfo_name', d: { pid: p.id, who } }; await this.saveChat(chatId, c);
         await this.ask(chatId, `Per la richiesta al medico mi servono i dati dell'assistita (li ricordo per le prossime volte).\n\nNome e cognome di <b>${esc(p.name)}</b>?`, null, 'Es. Maria Rossi');
