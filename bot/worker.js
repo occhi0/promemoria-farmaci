@@ -348,7 +348,12 @@ export class Store {
     const { text, kb } = this.therapyMsg(c, title);
     if (P.terapia && !fresh) { const r = await this.edit(mc, P.terapia, text, kb); if (r.ok || /not modified/i.test(r.description || '')) return; }
     if (P.terapia && fresh) await this.del(mc, P.terapia);
-    const r = await this.send(mc, text, kb);
+    let r = await this.send(mc, text, kb);
+    if (!r.ok) {
+      const err = r.description || JSON.stringify(r).slice(0, 200);
+      r = await this.send(mc, text);   // senza pulsante, così l'elenco si vede comunque
+      if (acl.admin) await this.send(acl.admin, `⚠️ Non riesco a mandare la terapia con il pulsante WhatsApp nel gruppo semplice.\nErrore di Telegram: <code>${esc(err)}</code>${r.ok ? '\n(L\'ho mandata senza pulsante.)' : '\nAnche senza pulsante: <code>' + esc(r.description || '') + '</code>'}`);
+    }
     if (r.ok) { P.terapia = r.result.message_id; await this.saveAcl(acl); }
   }
 
