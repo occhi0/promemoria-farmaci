@@ -43,9 +43,11 @@ La cartella `bot/` contiene un bot Telegram che manda i promemoria **anche con i
 
 ## Comandi
 
-`/aggiungi` · `/oggi` · `/farmaci` · `/scorte` · `/storico` · `/annulla` · `/aiuto`
+`/aggiungi` · `/oggi` · `/farmaci` · `/scorte` · `/storico` · `/esporta` · `/trasferisci` · `/annulla` · `/aiuto`
 
 Puoi gestire anche i farmaci dei familiari: quando aggiungi un farmaco scegli per chi è.
+
+**Condividere con la famiglia**: crea un gruppo Telegram, aggiungi il bot e scrivi `/start` nel gruppo (deve farlo chi ha creato il bot). Nel gruppo tutti possono aggiungere farmaci e segnare le dosi; i promemoria arrivano lì. Con `/trasferisci` sposti nel gruppo i farmaci di una persona dalla chat privata.
 
 ## Privacy
 

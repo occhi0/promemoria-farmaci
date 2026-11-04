@@ -82,9 +82,10 @@ All'orario di ogni dose ti mando un messaggio con i pulsanti ✅ Preso, ⏰ ${SN
 /farmaci – elenco, modifica, pausa, scorte, elimina
 /scorte – compresse rimaste
 /storico – ultimi 7 giorni
+/esporta – riepilogo da conservare
 /annulla – interrompi l'operazione in corso
 
-Puoi gestire anche i farmaci dei familiari: quando aggiungi un farmaco scegli per chi è.`;
+Puoi gestire anche i farmaci dei familiari: quando aggiungi un farmaco scegli per chi è. Per condividerli (ad esempio con le sorelle per i farmaci della mamma) crea un gruppo Telegram, aggiungimi e scrivi lì /start: nel gruppo potranno usarmi tutti.`;
 
 const COMMANDS = [
   { command: 'oggi', description: 'Dosi di oggi' },
@@ -92,6 +93,8 @@ const COMMANDS = [
   { command: 'farmaci', description: 'Elenco e modifica dei farmaci' },
   { command: 'scorte', description: 'Compresse rimaste' },
   { command: 'storico', description: 'Ultimi 7 giorni' },
+  { command: 'esporta', description: 'Riepilogo da conservare' },
+  { command: 'trasferisci', description: 'Sposta farmaci nel gruppo' },
   { command: 'annulla', description: "Interrompi l'operazione in corso" },
   { command: 'aiuto', description: 'Come funziona' }
 ];
@@ -270,10 +273,15 @@ export class Store {
     if (!acl.admin && priv && cmd === '/start') {
       acl.admin = uid; acl.chats[chatId] = name;
       await this.saveAcl(acl);
-      return this.send(chatId, `Ciao ${esc(name)}! Questo bot ora è solo tuo: nessun altro potrà usarlo.\n\n${HELP}`);
+      return this.send(chatId, `Ciao ${esc(name)}! Questo bot ora è tuo: nessun altro potrà usarlo, tranne i gruppi in cui lo aggiungi tu.\n\n${HELP}`);
     }
-    if (uid !== acl.admin) { if (priv) await this.send(chatId, 'Questo è un bot privato.'); return; }
-    if (!acl.chats[chatId]) { acl.chats[chatId] = msg.chat.title || name; await this.saveAcl(acl); }
+    // Accesso: la tua chat privata, e i gruppi che hai collegato tu (lì può usarlo chiunque del gruppo).
+    if (!acl.chats[chatId]) {
+      if (priv || uid !== acl.admin || !cmd) { if (priv) await this.send(chatId, 'Questo è un bot privato.'); return; }
+      acl.chats[chatId] = msg.chat.title || 'Gruppo'; await this.saveAcl(acl);
+      await this.send(chatId, `👋 Gruppo <b>${esc(msg.chat.title || '')}</b> collegato!\n\nQui chiunque del gruppo può aggiungere farmaci, segnare le dosi e vedere lo storico. I promemoria dei farmaci inseriti qui arriveranno nel gruppo.\n\nPer spostare qui farmaci già inseriti nella tua chat privata: /trasferisci`);
+      if (cmd === '/start') return;
+    }
 
     const c = await this.chat(chatId);
     if (cmd) {
@@ -287,6 +295,15 @@ export class Store {
         case '/farmaci': { const v = this.medsView(c); return this.send(chatId, v.text, v.kb); }
         case '/scorte': return this.send(chatId, this.stockView(c));
         case '/storico': return this.send(chatId, this.historyView(c));
+        case '/esporta': return this.send(chatId, this.exportView(c, msg.chat.title));
+        case '/trasferisci': {
+          if (priv) return this.send(chatId, 'Questo comando si usa dentro un gruppo: sposta lì i farmaci di una persona dalla tua chat privata.');
+          if (uid !== acl.admin) return this.send(chatId, 'Solo chi ha creato il bot può trasferire i farmaci.');
+          const pc = await this.chat(acl.admin);
+          if (!pc.persons.length) return this.send(chatId, 'Nella tua chat privata non ci sono farmaci da trasferire.');
+          return this.send(chatId, 'Di chi vuoi spostare i farmaci in questo gruppo?\nVerranno tolti dalla tua chat privata, con il loro storico.',
+            { inline_keyboard: [...pc.persons.map(p => [{ text: `${p.name} (${pc.meds.filter(m => m.person === p.id).length})`, callback_data: 'TR|' + p.id }]), [{ text: 'Annulla', callback_data: 'X' }]] });
+        }
         default: return priv ? this.send(chatId, 'Comando non riconosciuto. Scrivi /aiuto.') : null;
       }
     }
@@ -342,6 +359,18 @@ export class Store {
         c.meds.push(m); delete c.flows[uid]; await save();
         return this.send(chatId, `✅ Salvato!\n\n${this.medText(c, m)}\n\nTi avviserò a ogni orario.`, { remove_keyboard: true, selective: true });
       }
+      case 'mpname': {
+        const m = c.meds.find(x => x.id === d.med);
+        if (!m) { delete c.flows[uid]; await save(); return this.send(chatId, 'Il farmaco non esiste più.'); }
+        const nm = text.slice(0, 30);
+        let p = c.persons.find(x => x.name.toLowerCase() === nm.toLowerCase());
+        if (!p) { p = { id: rid(), name: nm }; c.persons.push(p); }
+        m.person = p.id;
+        c.persons = c.persons.filter(x => c.meds.some(y => y.person === x.id));
+        delete c.flows[uid]; await save();
+        const v = this.medDetail(c, m);
+        return this.send(chatId, `✅ Ora è di ${esc(p.name)}.\n\n` + v.text, v.kb);
+      }
       case 'edit': {
         const m = c.meds.find(x => x.id === d.med);
         if (!m) { delete c.flows[uid]; await save(); return this.send(chatId, 'Il farmaco non esiste più.'); }
@@ -375,6 +404,18 @@ export class Store {
   /* ---------- viste ---------- */
   medText(c, m) {
     return `<b>${esc(m.name)}</b>${m.dose ? ' ' + esc(m.dose) : ''}${m.paused ? ' ⏸ <i>in pausa</i>' : ''}\n👤 ${esc(this.person(c, m.person))}\n🕐 ${m.times.join(', ')} · ${daysText(m.days)}${m.stock != null ? `\n📦 ${m.stock} unità` : ''}`;
+  }
+  exportView(c, title) {
+    if (!c.meds.length) return 'Non ci sono farmaci da esportare.';
+    const n = romeParts();
+    let t = `📋 <b>Promemoria farmaci — riepilogo</b>\n${title ? esc(title) + ' · ' : ''}${fmtDate(n.date)} ore ${n.hm}\n`;
+    for (const p of c.persons) {
+      const ms = c.meds.filter(m => m.person === p.id);
+      if (!ms.length) continue;
+      t += `\n👤 <b>${esc(p.name)}</b>\n`;
+      for (const m of ms) t += `• ${esc(m.name)}${m.dose ? ' ' + esc(m.dose) : ''} — ${m.times.join(', ')}, ${daysText(m.days)}${m.stock != null ? `, scorte ${m.stock}` : ''}${m.paused ? ' (in pausa)' : ''}\n`;
+    }
+    return t + '\nConserva questo messaggio (ad esempio inoltralo ai Messaggi salvati): se un giorno dovessi reinserire i farmaci, qui trovi tutto.';
   }
   todayView(c) {
     const n = romeParts();
@@ -412,7 +453,7 @@ export class Store {
       text: this.medText(c, m), kb: {
         inline_keyboard: [
           [{ text: '✏️ Nome', callback_data: 'ME|' + m.id + '|name' }, { text: '✏️ Dosaggio', callback_data: 'ME|' + m.id + '|dose' }, { text: '🕐 Orari', callback_data: 'ME|' + m.id + '|times' }],
-          [{ text: m.paused ? '▶️ Riprendi' : '⏸ Metti in pausa', callback_data: 'MP|' + m.id }, { text: '📦 Scorte', callback_data: 'MS|' + m.id }],
+          [{ text: '👤 Persona', callback_data: 'MW|' + m.id }, { text: m.paused ? '▶️ Riprendi' : '⏸ Pausa', callback_data: 'MP|' + m.id }, { text: '📦 Scorte', callback_data: 'MS|' + m.id }],
           [{ text: '🗑 Elimina', callback_data: 'MD|' + m.id }, { text: '⬅️ Elenco', callback_data: 'ML' }]
         ]
       }
@@ -458,7 +499,6 @@ export class Store {
     const chatId = String(q.message.chat.id), mid = q.message.message_id, uid = String(q.from.id), who = q.from.first_name || '';
     const acl = await this.acl();
 
-    if (uid !== acl.admin) return ans('Bot privato');
     if (!acl.chats[chatId]) return ans('Chat non autorizzata');
     const c = await this.chat(chatId);
     const [k, ...r] = data.split('|');
@@ -502,6 +542,29 @@ export class Store {
     }
     if (k === 'OR') { const v = this.todayView(c); await this.edit(chatId, mid, v.text, v.kb); return ans('Aggiornato'); }
 
+    if (k === 'TR') {
+      if (uid !== acl.admin) return ans('Solo chi ha creato il bot può farlo');
+      if (chatId === acl.admin) return ans();
+      const pc = await this.chat(acl.admin);
+      const p = pc.persons.find(x => x.id === r[0]);
+      if (!p) { await this.edit(chatId, mid, 'Niente da trasferire.'); return ans(); }
+      const moving = pc.meds.filter(m => m.person === p.id), ids = new Set(moving.map(m => m.id));
+      let gp = c.persons.find(x => x.name.toLowerCase() === p.name.toLowerCase());
+      if (!gp) { gp = { id: p.id, name: p.name }; c.persons.push(gp); }
+      for (const m of moving) c.meds.push({ ...m, person: gp.id });
+      for (const dk of Object.keys(pc.log)) for (const key of Object.keys(pc.log[dk])) if (ids.has(key.split('@')[0])) {
+        c.log[dk] = c.log[dk] || {}; c.log[dk][key] = pc.log[dk][key]; delete pc.log[dk][key];
+        if (!Object.keys(pc.log[dk]).length) delete pc.log[dk];
+      }
+      for (const dk of Object.keys(pc.sent)) for (const key of Object.keys(pc.sent[dk])) if (ids.has(key.split('@')[0])) { c.sent[dk] = c.sent[dk] || {}; c.sent[dk][key] = pc.sent[dk][key]; delete pc.sent[dk][key]; }
+      pc.meds = pc.meds.filter(m => !ids.has(m.id));
+      pc.snooze = pc.snooze.filter(s => !ids.has(s.medId));
+      pc.persons = pc.persons.filter(x => x.id !== p.id);
+      await this.saveChat(chatId, c); await this.saveChat(acl.admin, pc);
+      await this.edit(chatId, mid, `✅ Spostati qui ${moving.length} ${moving.length === 1 ? 'farmaco' : 'farmaci'} di <b>${esc(p.name)}</b>. Da ora i loro promemoria arrivano in questo gruppo.`);
+      return ans('Trasferiti');
+    }
+
     // aggiunta guidata
     const fl = c.flows[uid];
     if (k === 'X') { delete c.flows[uid]; await this.saveChat(chatId, c); await this.edit(chatId, mid, 'Operazione annullata.'); return ans(); }
@@ -532,9 +595,29 @@ export class Store {
     // gestione farmaci
     if (k === 'ML') { const v = this.medsView(c); await this.edit(chatId, mid, v.text, v.kb); return ans(); }
     const m = c.meds.find(x => x.id === r[0]);
-    if (['MM', 'MP', 'MS', 'MD', 'MDY', 'ME'].includes(k) && !m) { const v = this.medsView(c); await this.edit(chatId, mid, v.text, v.kb); return ans('Farmaco non trovato'); }
+    if (['MM', 'MP', 'MS', 'MD', 'MDY', 'ME', 'MW', 'MWP', 'MWN'].includes(k) && !m) { const v = this.medsView(c); await this.edit(chatId, mid, v.text, v.kb); return ans('Farmaco non trovato'); }
     if (k === 'MM') { const v = this.medDetail(c, m); await this.edit(chatId, mid, v.text, v.kb); return ans(); }
     if (k === 'MP') { m.paused = !m.paused; await this.saveChat(chatId, c); const v = this.medDetail(c, m); await this.edit(chatId, mid, v.text, v.kb); return ans(m.paused ? 'In pausa: niente promemoria' : 'Promemoria riattivati'); }
+    if (k === 'MW') {
+      await this.edit(chatId, mid, `Di chi è <b>${esc(m.name)}</b>?`, { inline_keyboard: [
+        ...c.persons.filter(p => p.id !== m.person).map(p => [{ text: p.name, callback_data: `MWP|${m.id}|${p.id}` }]),
+        [{ text: '➕ Nuova persona', callback_data: 'MWN|' + m.id }], [{ text: '⬅️ Indietro', callback_data: 'MM|' + m.id }]] });
+      return ans();
+    }
+    if (k === 'MWP') {
+      const p = c.persons.find(x => x.id === r[1]);
+      if (!p) return ans();
+      m.person = p.id;
+      c.persons = c.persons.filter(x => c.meds.some(y => y.person === x.id));
+      await this.saveChat(chatId, c);
+      const v = this.medDetail(c, m); await this.edit(chatId, mid, `✅ Ora è di ${esc(p.name)}.\n\n` + v.text, v.kb);
+      return ans('Spostato');
+    }
+    if (k === 'MWN') {
+      c.flows[uid] = { step: 'mpname', d: { med: m.id } }; await this.saveChat(chatId, c);
+      await this.ask(chatId, `Come si chiama la persona che prende <b>${esc(m.name)}</b>? (es. Mamma)`, null, 'Nome');
+      return ans();
+    }
     if (k === 'ME') {
       const field = r[1];
       if (!['name', 'dose', 'times'].includes(field)) return ans();
