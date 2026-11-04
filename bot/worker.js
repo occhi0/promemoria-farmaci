@@ -130,7 +130,7 @@ All'orario di ogni dose ti mando un messaggio con i pulsanti ✅ Preso, ⏰ ${SN
 /farmaci – elenco, modifica, pausa, scorte, elimina
 /scorte – compresse rimaste
 /storico – ultimi 7 giorni
-/esporta – riepilogo da conservare
+/esporta – elenco della terapia da mostrare al medico
 /annulla – interrompi l'operazione in corso
 
 Puoi gestire anche i farmaci dei familiari: quando aggiungi un farmaco scegli per chi è. Per condividerli (ad esempio con le sorelle per i farmaci della mamma) crea un gruppo Telegram, aggiungimi e scrivi lì /start: nel gruppo potranno usarmi tutti.`;
@@ -141,7 +141,7 @@ const COMMANDS = [
   { command: 'farmaci', description: 'Elenco e modifica dei farmaci' },
   { command: 'scorte', description: 'Compresse rimaste' },
   { command: 'storico', description: 'Ultimi 7 giorni' },
-  { command: 'esporta', description: 'Riepilogo da conservare' },
+  { command: 'esporta', description: 'Elenco della terapia per il medico' },
   { command: 'trasferisci', description: 'Sposta farmaci nel gruppo' },
   { command: 'annulla', description: "Interrompi l'operazione in corso" },
   { command: 'aiuto', description: 'Come funziona' }
@@ -549,22 +549,36 @@ export class Store {
     const extra = (next ? `\n🔁 dal ${fmtDate(next.from)}: ${next.times.join(', ')}` : '') + (m.end ? `\n🏁 ${this.ended(m, today) ? 'terminata il' : 'fino al'} ${fmtDate(m.end)}` : '');
     return `<b>${esc(m.name)}</b>${m.dose ? ' ' + esc(m.dose) : ''}${m.paused ? ' ⏸ <i>in pausa</i>' : ''}${this.multi(c) ? '\n👤 ' + esc(this.person(c, m.person)) : ''}\n🕐 ${m.times.join(', ')} · ${daysText(m.days)}${m.stock != null ? `\n📦 ${m.stock} unità` : ''}` + extra;
   }
+  // Elenco della terapia in corso, da mostrare al medico: niente scorte, niente farmaci in pausa o terminati.
   exportView(c, title) {
-    if (!c.meds.length) return 'Non ci sono farmaci da esportare.';
     const n = romeParts();
-    let t = `📋 <b>Promemoria farmaci — riepilogo</b>\n${title ? esc(title) + ' · ' : ''}${fmtDate(n.date)} ore ${n.hm}\n`;
-    for (const p of c.persons) {
-      const ms = c.meds.filter(m => m.person === p.id);
-      if (!ms.length) continue;
-      t += `\n👤 <b>${esc(p.name)}</b>\n`;
+    const active = c.meds.filter(m => !m.paused && !this.ended(m, n.date));
+    if (!active.length) return 'Non ci sono terapie in corso.';
+    const freq = k => k === 1 ? '1 volta al giorno' : `${k} volte al giorno`;
+    const hh = ts => ts.map(t => t.endsWith(':00') ? String(+t.slice(0, 2)) : t.replace(/^0/, '')).join(', ');
+    const [y, mo, d] = n.date.split('-').map(Number);
+    const dateLong = new Date(Date.UTC(y, mo - 1, d)).toLocaleDateString('it-IT', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
+    const persons = [...new Set(active.map(m => m.person))];
+    let t = `🩺 <b>Terapia in corso</b>${persons.length === 1 ? ' — ' + esc(this.person(c, persons[0])) : ''}\nAggiornata al ${dateLong}\n`;
+    for (const pid of persons) {
+      if (persons.length > 1) t += `\n<b>${esc(this.person(c, pid))}</b>`;
+      const ms = active.filter(m => m.person === pid).sort((a, b) => a.name.localeCompare(b.name));
       for (const m of ms) {
-        t += `• ${esc(m.name)}${m.dose ? ' ' + esc(m.dose) : ''} — ${m.times.join(', ')}, ${daysText(m.days)}${m.stock != null ? `, scorte ${m.stock}` : ''}${m.paused ? ' (in pausa)' : ''}\n`;
-        for (const p of [...(m.plan || [])].sort((a, b) => a.from < b.from ? -1 : 1)) t += `   🔁 dal ${fmtDate(p.from)}: ${p.times.join(', ')}\n`;
-        t += m.end ? `   📆 dal ${fmtDate(m.start)} al ${fmtDate(m.end)}\n` : '';
-        if (m.notes) t += `   📝 ${esc(m.notes)}\n`;
+        const cur = this.timesOn(m, n.date);
+        const FULL = ['domenica', 'lunedì', 'martedì', 'mercoledì', 'giovedì', 'venerdì', 'sabato'];
+        const lim = m.days.length && m.days.length < 7;
+        const when = !lim ? freq(cur.length)
+          : m.days.length === 1 ? `${cur.length === 1 ? '1 volta' : cur.length + ' volte'} a settimana, il ${FULL[m.days[0]]}`
+          : `${freq(cur.length)}, solo ${[1, 2, 3, 4, 5, 6, 0].filter(x => m.days.includes(x)).map(x => FULL[x]).join(', ')}`;
+        t += `\n• <b>${esc(m.name)}</b>${m.dose ? ' ' + esc(m.dose) : ''}\n   ${when}, ore ${hh(cur)}`;
+        for (const p of [...(m.plan || [])].filter(p => p.from > n.date).sort((a, b) => a.from < b.from ? -1 : 1))
+          t += `\n   dal ${fmtDate(p.from)}: ${freq(p.times.length)}, ore ${hh(p.times)}`;
+        if (m.end) t += `\n   fino al ${fmtDate(m.end)}`;
+        if (m.notes) t += `\n   ${esc(m.notes)}`;
       }
+      t += '\n';
     }
-    return t + '\nConserva questo messaggio (ad esempio inoltralo ai Messaggi salvati): se un giorno dovessi reinserire i farmaci, qui trovi tutto.';
+    return t;
   }
   todayView(c) {
     const n = romeParts();
