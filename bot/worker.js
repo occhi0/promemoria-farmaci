@@ -129,7 +129,7 @@ All'orario di ogni dose ti mando un messaggio con i pulsanti ✅ Preso, ⏰ ${SN
 /oggi – le dosi di oggi
 /farmaci – elenco, modifica, pausa, scorte, elimina
 /scorte – compresse rimaste
-/storico – ultimi 7 giorni
+/storico – terapie a tempo, in corso e concluse
 /terapia – elenco della terapia da mostrare al medico
 /esporta – copia di sicurezza completa
 /annulla – interrompi l'operazione in corso
@@ -141,7 +141,7 @@ const COMMANDS = [
   { command: 'aggiungi', description: 'Aggiungi un farmaco' },
   { command: 'farmaci', description: 'Elenco e modifica dei farmaci' },
   { command: 'scorte', description: 'Compresse rimaste' },
-  { command: 'storico', description: 'Ultimi 7 giorni' },
+  { command: 'storico', description: 'Storico delle terapie a tempo' },
   { command: 'terapia', description: 'Elenco della terapia per il medico' },
   { command: 'esporta', description: 'Copia di sicurezza completa' },
   { command: 'trasferisci', description: 'Sposta farmaci nel gruppo' },
@@ -354,8 +354,8 @@ export class Store {
           await this.send(chatId, `🏁 <b>Terapia conclusa</b>\n${esc(m.name)}${m.dose ? ' ' + esc(m.dose) : ''}${this.pp(c, m.person)}: l'ultimo giorno era ${fmtDate(m.end)}. Non mando più promemoria; la trovi in /storico tra le terapie concluse.`,
             { inline_keyboard: [[{ text: '📆 Prolunga', callback_data: 'MT|' + m.id }]] });
         }
-        // le terapie concluse da più di 90 giorni escono anche dallo storico
-        const old = addDays(n.date, -90).date;
+        // le terapie concluse da più di un anno escono anche dallo storico
+        const old = addDays(n.date, -365).date;
         if (c.meds.some(m => m.end && m.end < old)) c.meds = c.meds.filter(m => !(m.end && m.end < old));
       }
       // pulizia
@@ -767,7 +767,7 @@ export class Store {
     const done = c.meds.filter(m => this.ended(m, today)).sort((a, b) => a.end < b.end ? 1 : -1);
     if (!done.length) return { text: 'Nessuna terapia conclusa.', kb: { inline_keyboard: [[{ text: '⬅️ Elenco', callback_data: 'ML' }]] } };
     return {
-      text: '🗂 <b>Terapie concluse</b>\nRestano nello storico per 90 giorni. Toccane una per prolungarla o eliminarla.',
+      text: '🗂 <b>Terapie concluse</b>\nRestano nello storico per un anno. Toccane una per prolungarla o eliminarla.',
       kb: { inline_keyboard: [...done.map(m => [{ text: `${m.name}${m.dose ? ' ' + m.dose : ''} · ${m.archived ? 'archiviato il' : 'fino al'} ${fmtDate(m.archived || m.end)}`.slice(0, 60), callback_data: 'MM|' + m.id }]), [{ text: '⬅️ Elenco', callback_data: 'ML' }]] }
     };
   }
@@ -855,34 +855,35 @@ export class Store {
     });
     return `📦 <b>Scorte</b>\n\n${lines.join('\n')}\n\n🟢 più di ${YELLOW_DAYS} giorni · 🟡 ${YELLOW_DAYS} giorni o meno · 🔴 ${LOW_STOCK_DAYS} giorni o meno · ⚪ non conteggiate\nPer aggiornarle: /farmaci → farmaco → 📦 Scorte.`;
   }
+  // "4 volte al giorno dal 3/11 al 9/11, 3 volte al giorno dal 10/11 al 16/11"
+  periodLine(m) {
+    const freq = k => k === 1 ? '1 volta al giorno' : `${k} volte al giorno`;
+    const freq2 = k => (m.days.length && m.days.length < 7) ? (m.days.length === 1 && k === 1 ? '1 volta a settimana' : `${freq(k)} (${daysText(m.days)})`) : freq(k);
+    const short = dt => { const [, mm, dd] = dt.split('-').map(Number); return `${dd}/${mm}`; };
+    const dal = dt => (/^(8|11)\//.test(short(dt)) ? "dall'" : 'dal ') + short(dt);
+    const al = dt => (/^(8|11)\//.test(short(dt)) ? "all'" : 'al ') + short(dt);
+    const start = m.since || m.start;
+    const phases = [{ from: start, times: m.times }, ...[...(m.plan || [])].filter(p => !m.end || p.from <= m.end).sort((a, b) => a.from < b.from ? -1 : 1)];
+    return phases.map((p, idx) => {
+      const to = idx < phases.length - 1 ? addDays(phases[idx + 1].from, -1).date : m.end;
+      return `${freq2(p.times.length)} ${dal(p.from)}${to ? ' ' + al(to) : ''}`;
+    }).join(', ');
+  }
+  // Storico delle sole terapie a tempo (con una data di fine): le croniche non compaiono.
   historyView(c) {
     const n = romeParts();
-    if (!c.meds.length) return 'Non ci sono ancora farmaci.';
-    // Elenco semplice: per ogni farmaco quante dosi prese su quelle previste.
-    const per = {};
-    for (let i = 0; i < 7; i++) {
-      const day = addDays(n.date, -i);
-      for (const d of this.dosesOn(c, day.date, day.dow)) {
-        if (i === 0 && toMin(d.time) > n.min) continue;
-        const e = this.getLog(c, day.date, d.key);
-        const p = per[d.m.id] = per[d.m.id] || { m: d.m, t: 0, n: 0 };
-        p.n++; if (e && e.s === 'taken') p.t++;
-      }
-    }
-    const rows = Object.values(per).sort((a, b) => a.m.name.localeCompare(b.m.name, 'it', { sensitivity: 'base' }) || ((a.m.since || a.m.start || '') < (b.m.since || b.m.start || '') ? -1 : 1));
-    let text = '📊 <b>Ultimi 7 giorni</b>\n';
-    text += !rows.length ? '\nNessuna dose prevista finora.' : '\n' + rows.map(p => `${p.t === p.n ? '✅' : '❗'} <b>${esc(p.m.name)}</b>${this.pp(c, p.m.person)}: ${p.t} su ${p.n}`).join('\n');
-    const done = c.meds.filter(m => this.ended(m, n.date)).sort((a, b) => a.end < b.end ? 1 : -1);
-    if (done.length) {
-      text += '\n\n🗂 <b>Terapie concluse</b>';
-      for (const m of done) {
-        const k = this.countDoses(c, m, m.start || m.end, m.end);
-        const short = dt => { const [, mm, dd] = dt.split('-').map(Number); return `${dd}/${mm}`; };
-        text += `\n• ${esc(m.name)}${m.dose ? ' ' + esc(m.dose) : ''}${this.pp(c, m.person)}: dal ${short(m.since || m.start)} al ${short(m.end)}${k.n ? ` — prese ${k.t} di ${k.n}` : ''}`;
-      }
-    }
-    return text;
+    const timed = c.meds.filter(m => m.end);
+    if (!timed.length) return '📋 <b>Storico terapie</b>\n\nNessuna terapia a tempo. Le terapie croniche non compaiono qui: le trovi in /terapia.';
+    const byStart = (a, b) => a.name.localeCompare(b.name, 'it', { sensitivity: 'base' }) || ((a.since || a.start) < (b.since || b.start) ? -1 : 1);
+    const line = m => `• <b>${esc(m.name)}</b>${m.dose ? ' ' + esc(m.dose) : ''}${this.pp(c, m.person)}: ${this.periodLine(m)}${m.archived ? ' (sospesa)' : ''}`;
+    const now = timed.filter(m => !this.ended(m, n.date)).sort(byStart);
+    const done = timed.filter(m => this.ended(m, n.date)).sort((a, b) => a.end < b.end ? 1 : a.end > b.end ? -1 : byStart(a, b));
+    let t = '📋 <b>Storico terapie</b>';
+    if (now.length) t += '\n\n<b>In corso</b>\n' + now.map(line).join('\n');
+    if (done.length) t += '\n\n<b>Concluse</b>\n' + done.map(line).join('\n');
+    return t;
   }
+
 
   /* ---------- pulsanti ---------- */
   async onCallback(q) {
