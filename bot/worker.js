@@ -483,11 +483,13 @@ export class Store {
     const daysLeft = m => (m.stock == null || !m.times.length) ? Infinity : m.stock / this.perDay(m);
     const sorted = [...c.meds].sort((a, b) => daysLeft(a) - daysLeft(b) || a.name.localeCompare(b.name));
     const lines = sorted.map(m => {
-      if (m.stock == null) return `• ${esc(m.name)} (${esc(this.person(c, m.person))}): non conteggiate`;
-      const left = m.stock / this.perDay(m);
-      return `${left <= LOW_STOCK_DAYS ? '⚠️' : '•'} ${esc(m.name)} (${esc(this.person(c, m.person))}): <b>${m.stock}</b> unità, circa ${Math.floor(left)} giorni`;
+      if (m.stock == null) return `⚪ ${esc(m.name)} (${esc(this.person(c, m.person))}): non conteggiate`;
+      const left = m.stock / this.perDay(m), d = Math.floor(left);
+      const dot = left <= LAST_STOCK_DAYS ? '🔴' : left <= LOW_STOCK_DAYS ? '🟠' : '🟢';
+      const txt = `${esc(m.name)} (${esc(this.person(c, m.person))}): ${m.stock} unità, ${d < 1 ? 'meno di un giorno' : 'circa ' + d + (d === 1 ? ' giorno' : ' giorni')}`;
+      return `${dot} ${dot === '🟢' ? txt : '<b>' + txt + '</b>'}`;
     });
-    return `📦 <b>Scorte</b>\n\n${lines.join('\n')}\n\nPer aggiornarle: /farmaci → farmaco → Scorte.`;
+    return `📦 <b>Scorte</b>\n\n${lines.join('\n')}\n\n🟢 più di ${LOW_STOCK_DAYS} giorni · 🟠 ${LOW_STOCK_DAYS} giorni o meno · 🔴 ${LAST_STOCK_DAYS} giorni o meno · ⚪ non conteggiate\nPer aggiornarle: /farmaci → farmaco → 📦 Scorte.`;
   }
   historyView(c) {
     const n = romeParts();
