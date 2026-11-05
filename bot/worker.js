@@ -272,11 +272,17 @@ export class Store {
   edit(chatId, mid, text, markup) {
     return tg(this.env, 'editMessageText', { chat_id: chatId, message_id: mid, text, parse_mode: 'HTML', reply_markup: markup || { inline_keyboard: [] } });
   }
-  ask(chatId, text, replyTo, placeholder) {
+  async ask(chatId, text, replyTo, placeholder) {
     const markup = { force_reply: true, input_field_placeholder: placeholder || '' };
     const extra = {};
     if (replyTo) { markup.selective = true; extra.reply_parameters = { message_id: replyTo, allow_sending_without_reply: true }; }
-    return this.send(chatId, text, markup, extra);
+    return this.fsend(chatId, text, markup, extra);
+  }
+  // messaggio intermedio di un'operazione: nei gruppi principali si cancella quando l'operazione finisce
+  async fsend(chatId, text, markup, extra) {
+    const r = await this.send(chatId, text, markup, extra);
+    if (r && r.ok && this._sentLog) this._sentLog.push([r._chat, r.result.message_id]);
+    return r;
   }
 
   /* ---------- dosi ---------- */
@@ -514,7 +520,51 @@ export class Store {
   }
 
   /* ---------- messaggi ---------- */
+  // Pulizia nei gruppi principali: le domande e risposte di un'operazione spariscono quando l'operazione finisce.
   async onUpdate(up) {
+    this._sentLog = [];
+    const res = await this.onUpdateInner(up);
+    try { await this.tidyFlow(up); } catch (e) { console.log('tidy', e && e.stack || e); }
+    return res;
+  }
+  async tidyFlow(up) {
+    const msg = up.message, q = up.callback_query;
+    const chatId = String(msg ? msg.chat.id : q && q.message ? q.message.chat.id : '');
+    const uid = String(msg ? (msg.from || {}).id : (q.from || {}).id);
+    if (!chatId.startsWith('-')) return;
+    const acl = await this.acl();
+    const id = (acl.migrated || {})[chatId] || chatId;
+    if (!acl.chats[id] || (acl.mirrors || {})[id]) return;   // solo gruppi principali
+    const c = await this.chat(id);
+    acl.fm = acl.fm || {}; const key = id + ':' + uid;
+    const mine = (this._sentLog || []).filter(([ch]) => ch === id).map(([, m]) => m);
+    const answer = msg && msg.text && !msg.text.startsWith('/') ? [msg.message_id] : [];
+    const list = acl.fm[key] || [];
+    if (c.flows[uid]) {
+      if (!mine.length && !answer.length) return;
+      acl.fm[key] = [...list, ...answer, ...mine].slice(-60);
+    } else {
+      if (!list.length && !answer.length) return;
+      for (const m of [...list, ...answer]) await this.del(id, m);
+      delete acl.fm[key];
+    }
+    await this.saveAcl(acl);
+  }
+  schedDel(acl, chat, mid, minutes) { acl.temp = acl.temp || []; if (!acl.temp.some(t => t.chat === String(chat) && t.mid === mid)) acl.temp.push({ chat: String(chat), mid, at: Date.now() + minutes * 60e3 }); }
+  unschedDel(acl, pairs) { acl.temp = (acl.temp || []).filter(t => !pairs.some(([ch, m]) => String(ch) === t.chat && m === t.mid)); }
+  // Schermate dei comandi nei gruppi: resta solo l'ultima di ogni tipo
+  async screen(chatId, type, text, kb) {
+    const acl = await this.acl();
+    const isGroup = String(chatId).startsWith('-');
+    const r = await this.send(chatId, text, kb);
+    if (isGroup && r.ok) {
+      acl.scr = acl.scr || {}; const S = acl.scr[r._chat] = acl.scr[r._chat] || {};
+      if (S[type]) await this.del(r._chat, S[type]);
+      S[type] = r.result.message_id; await this.saveAcl(acl);
+    }
+    return r;
+  }
+  async onUpdateInner(up) {
     if (up.callback_query) return this.onCallback(up.callback_query);
     const msg = up.message;
     if (msg && msg.migrate_to_chat_id) return this.migrateChat(msg.chat.id, msg.migrate_to_chat_id);
@@ -523,7 +573,8 @@ export class Store {
     const SERVICE = ['new_chat_title', 'new_chat_photo', 'delete_chat_photo', 'pinned_message', 'new_chat_members', 'left_chat_member', 'message_auto_delete_timer_changed', 'video_chat_scheduled', 'video_chat_started', 'video_chat_ended', 'boost_added', 'chat_background_set'];
     if (msg && SERVICE.some(k => msg[k] !== undefined)) {
       const a0 = await this.acl();
-      if ((a0.mirrors || {})[String(msg.chat.id)]) await this.del(msg.chat.id, msg.message_id);
+      const cid = String(msg.chat.id);
+      if ((a0.mirrors || {})[cid] || (cid.startsWith('-') && a0.chats[cid] !== undefined)) await this.del(msg.chat.id, msg.message_id);
       return;
     }
     if (!msg || !msg.from || msg.from.is_bot) return;
@@ -584,6 +635,7 @@ export class Store {
     }
 
     const c = await this.chat(chatId);
+    if (cmd && !priv) await this.del(chatId, msg.message_id);   // gruppo principale: via il comando scritto
     if (cmd) {
       switch (cmd) {
         case '/start': case '/aiuto': case '/help': return this.send(chatId, HELP);
@@ -591,11 +643,11 @@ export class Store {
         case '/annulla':
           delete c.flows[uid]; await this.saveChat(chatId, c);
           return this.send(chatId, 'Operazione annullata.', { remove_keyboard: true, selective: true });
-        case '/oggi': { const v = this.todayView(c); return this.send(chatId, v.text, v.kb); }
-        case '/farmaci': { const v = this.medsView(c); return this.send(chatId, v.text, v.kb); }
+        case '/oggi': { const v = this.todayView(c); return this.screen(chatId, 'oggi', v.text, v.kb); }
+        case '/farmaci': { const v = this.medsView(c); return this.screen(chatId, 'farmaci', v.text, v.kb); }
         case '/scorte': {
           const has = c.meds.some(m => !this.ended(m, romeParts().date));
-          if (!has) return this.send(chatId, this.stockView(c));
+          if (!has) return this.screen(chatId, 'scorte', this.stockView(c));
           const td = romeParts().date;
           const dl = m => (m.stock == null || !m.times.length) ? Infinity : m.stock / this.perDay(m);
           const ms = c.meds.filter(m => !this.ended(m, td)).sort((a, b) => dl(a) - dl(b) || a.name.localeCompare(b.name, 'it', { sensitivity: 'base' }));
@@ -603,9 +655,9 @@ export class Store {
           const rows = [];
           for (let i = 0; i < uniq.length; i += 2) rows.push(uniq.slice(i, i + 2).map(m => ({ text: `📦 ${shortName(m.name)}`.slice(0, 32), callback_data: 'SK|' + m.id })));
           rows.push([{ text: '📤 Richiedi ricette', callback_data: 'RQ' }]);
-          return this.send(chatId, this.stockView(c) + '\n\nTocca un farmaco per aggiungere una confezione.', { inline_keyboard: rows });
+          return this.screen(chatId, 'scorte', this.stockView(c) + '\n\nTocca un farmaco per aggiungere una confezione.', { inline_keyboard: rows });
         }
-        case '/storico': return this.send(chatId, this.historyView(c));
+        case '/storico': return this.screen(chatId, 'storico', this.historyView(c));
         case '/esporta': return this.send(chatId, this.exportView(c, msg.chat.title));
         case '/terapia': return this.sendTherapy(chatId, c, msg.chat.title);
         case '/trasferisci': {
@@ -631,7 +683,7 @@ export class Store {
       const p = c.persons[0];
       c.flows[uid] = { step: 'name', d: { person: p.id } };
       await this.saveChat(chatId, c);
-      await this.send(chatId, `💊 <b>Nuovo farmaco</b> per ${esc(p.name)}`, { inline_keyboard: [[{ text: '👤 È per un\'altra persona', callback_data: 'PC' }]] });
+      await this.fsend(chatId, `💊 <b>Nuovo farmaco</b> per ${esc(p.name)}`, { inline_keyboard: [[{ text: '👤 È per un\'altra persona', callback_data: 'PC' }]] });
       return this.ask(chatId, 'Come si chiama il farmaco?', null, 'Es. Ramipril');
     }
     return this.personPicker(chatId, c, uid);
@@ -642,7 +694,7 @@ export class Store {
     const kb = c.persons.map(p => [{ text: p.name, callback_data: 'P|' + p.id }]);
     kb.push([{ text: '➕ Nuova persona', callback_data: 'PN' }], [{ text: 'Annulla', callback_data: 'X' }]);
     if (editMid) return this.edit(chatId, editMid, '💊 <b>Nuovo farmaco</b>\nPer chi è?', { inline_keyboard: kb });
-    return this.send(chatId, '💊 <b>Nuovo farmaco</b>\nPer chi è?', { inline_keyboard: kb });
+    return this.fsend(chatId, '💊 <b>Nuovo farmaco</b>\nPer chi è?', { inline_keyboard: kb });
   }
   async flowInput(chatId, c, uid, fl, text, mid) {
     const d = fl.d;
@@ -665,7 +717,7 @@ export class Store {
         const t = parseTimes(text);
         if (!t) return this.ask(chatId, 'Non ho capito gli orari 🤔 Riprova, ad esempio <code>8 20</code> oppure <code>07:30 19:30</code>.', mid, 'Es. 8 20');
         d.times = t; fl.step = 'days'; await save();
-        return this.send(chatId, `Orari: <b>${t.join(', ')}</b>\nVa preso tutti i giorni?\n<i>(Il periodo dal… al… te lo chiedo subito dopo.)</i>`, {
+        return this.fsend(chatId, `Orari: <b>${t.join(', ')}</b>\nVa preso tutti i giorni?\n<i>(Il periodo dal… al… te lo chiedo subito dopo.)</i>`, {
           inline_keyboard: [[{ text: '✅ Sì, tutti i giorni', callback_data: 'D|all' }], [{ text: '📅 Solo certi giorni della settimana (es. il lunedì)', callback_data: 'D|some' }]]
         });
       }
@@ -678,7 +730,7 @@ export class Store {
           const pr = parsePeriod(text, today);
           if (pr) {
             d.days = []; d.start = pr.start; d.end = pr.end; fl.step = 'stock'; await save();
-            await this.send(chatId, `Ho capito: <b>tutti i giorni</b>, dal <b>${fmtDate(pr.start)}</b> al <b>${fmtDate(pr.end)}</b>.`);
+            await this.fsend(chatId, `Ho capito: <b>tutti i giorni</b>, dal <b>${fmtDate(pr.start)}</b> al <b>${fmtDate(pr.end)}</b>.`);
             return this.askStock(chatId, mid);
           }
         }
@@ -696,7 +748,7 @@ export class Store {
           d.start = pr.start; d.end = pr.end;
         }
         fl.step = 'stock'; await save();
-        if (d.end) await this.send(chatId, `📆 Periodo: dal <b>${fmtDate(d.start)}</b> al <b>${fmtDate(d.end)}</b>`);
+        if (d.end) await this.fsend(chatId, `📆 Periodo: dal <b>${fmtDate(d.start)}</b> al <b>${fmtDate(d.end)}</b>`);
         return this.askStock(chatId, mid);
       }
       case 'stock': {
@@ -707,7 +759,7 @@ export class Store {
         c.meds.push(m);
         if (st != null) {   // chiediamo subito quante compresse ci sono in una confezione
           c.flows[uid] = { step: 'pack', d: { med: m.id, fromAdd: true } }; await save();
-          await this.send(chatId, `✅ Salvato!\n\n${this.medText(c, m)}\n\nTi avviserò a ogni orario.`, { remove_keyboard: true, selective: true });
+          await this.fsend(chatId, `✅ Salvato!\n\n${this.medText(c, m)}\n\nTi avviserò a ogni orario.`, { remove_keyboard: true, selective: true });
           return this.ask(chatId, 'Ultima domanda: quante compresse ci sono in <b>una confezione</b>? Così quando lo ricomprate basta toccare "➕ 1 confezione".\nScrivi <b>-</b> per saltare.', mid, 'Es. 30');
         }
         delete c.flows[uid]; await save();
@@ -794,7 +846,7 @@ export class Store {
         this.startReq(c, uid, p.id); await save();
         await this.del(chatId, mid);   // via dalla chat il messaggio con il numero
         const v = this.reqView(c, uid, d.who);
-        const r1 = await this.send(chatId, '✅ Dati salvati.\n\n' + v.text, v.kb);
+        const r1 = await this.screen(chatId, 'ricette', '✅ Dati salvati.\n\n' + v.text, v.kb);
         if (r1.ok && c.flows[uid] && c.flows[uid].req) { c.flows[uid].req.mid = r1.result.message_id; await save(); }
         return r1;
       }
@@ -879,7 +931,7 @@ export class Store {
     const plain = t.replace(/<b>(.*?)<\/b>/g, '*$1*').replace(/<[^>]+>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
     const url = 'https://wa.me/?text=' + encodeURIComponent(plain);
     const ok = c.meds.length && url.length <= 4000;
-    await this.send(chatId, t, ok ? { inline_keyboard: [[{ text: '📤 Invia su WhatsApp', url }]] } : undefined);
+    await this.screen(chatId, 'terapia', t, ok ? { inline_keyboard: [[{ text: '📤 Invia su WhatsApp', url }]] } : undefined);
     if (c.meds.length && !ok) await this.send(chatId, "L'elenco è troppo lungo per il pulsante WhatsApp: tieni premuto il messaggio, tocca Copia e incollalo in WhatsApp.");
   }
   // Copia completa di sicurezza: tutto quello che serve per reinserire i farmaci.
@@ -1125,7 +1177,7 @@ export class Store {
     if (answerMid) await this.del(view, answerMid);
     fl.d.name = text.slice(0, 60); fl.step = 'occ_save';
     await this.saveChat(dataId, c);
-    return this.send(view, `<b>${esc(fl.d.name)}</b>: lo salvo tra i farmaci <b>al bisogno</b>? Comparirà in /terapia e nelle prossime richieste, senza promemoria.`,
+    return this.fsend(view, `<b>${esc(fl.d.name)}</b>: lo salvo tra i farmaci <b>al bisogno</b>? Comparirà in /terapia e nelle prossime richieste, senza promemoria.`,
       { inline_keyboard: [[{ text: '💾 Sì, salvalo', callback_data: 'RS|y' }, { text: 'Solo questa volta', callback_data: 'RS|n' }]] });
   }
   askTel(chatId, mid, to) {
@@ -1252,6 +1304,14 @@ export class Store {
         else await this.edit(chatId, mid, txt, kb);
       }
       await this.syncCopies(c, dataId, date, key, isMirror ? null : chatId, isMirror ? null : mid, txt, kb, mset);
+      {   // gruppo principale: i promemoria segnati spariscono dopo 2 minuti (c'è tempo per ↩️ Annulla)
+        const S = (c.sent[date] || {})[key];
+        const copies = (S && S.msgs ? S.msgs : (S && S.m ? [[dataId, S.m]] : [])).filter(([ch]) => !mset.has(String(ch)) && String(ch).startsWith('-'));
+        if (!isMirror && pressedReminder && chatId.startsWith('-') && !copies.some(([ch, m]) => String(ch) === chatId && m === mid)) copies.push([chatId, mid]);
+        if (k === 'U') this.unschedDel(acl, copies);
+        else if (k === 'T' || k === 'S' || k === 'O') for (const [ch, m] of copies) this.schedDel(acl, ch, m, 2);
+        if (copies.length) await this.saveAcl(acl);
+      }
       await this.refreshPanels(acl, dataId, c);
       if (low) await this.send(dataId, low.text, low.kb);
       return ans(answer);
@@ -1299,7 +1359,7 @@ export class Store {
         return ans();
       }
       this.startReq(c, uid, p.id);
-      const v = this.reqView(c, uid, who); const r1 = await this.send(chatId, v.text, v.kb);
+      const v = this.reqView(c, uid, who); const r1 = await this.screen(chatId, 'ricette', v.text, v.kb);
       if (r1.ok) c.flows[uid].req.mid = r1.result.message_id;
       await this.saveChat(dataId, c);
       return ans();
