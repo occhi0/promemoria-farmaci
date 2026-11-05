@@ -85,7 +85,7 @@ function studioTable(ct) {
     const am = STUDIO[d].find(x => toMin(x[0]) < 13 * 60), pm = STUDIO[d].find(x => toMin(x[0]) >= 13 * 60);
     return `${lbl.padEnd(4)}${fmt(am).padEnd(12)}${fmt(pm)}`;
   };
-  return `🕐 <b>Orari dello studio medico</b>\n${studioLine()}\n\n<pre>    Mattina     Pomeriggio\n${[['Lun', 1], ['Mar', 2], ['Mer', 3], ['Gio', 4], ['Ven', 5]].map(([l, d]) => row(l, d)).join('\n')}\nSab e Dom: chiuso</pre>${ct ? `\n📞 ${ct.to ? esc(ct.to) + ': ' : ''}${esc(ct.tel)}` : ''}\n<i>Questo messaggio si cancella da solo tra 5 minuti.</i>`;
+  return `🕐 <b>Orari dello studio medico</b>\n${studioLine()}\n\n<pre>    Mattina     Pomeriggio\n${[['Lun', 1], ['Mar', 2], ['Mer', 3], ['Gio', 4], ['Ven', 5]].map(([l, d]) => row(l, d)).join('\n')}\nSab e Dom: chiuso</pre>\n<i>Questo messaggio si cancella da solo tra 5 minuti.</i>`;
 }
 const MONTHS = { gen: 1, feb: 2, mar: 3, apr: 4, mag: 5, giu: 6, lug: 7, ago: 8, set: 9, ott: 10, nov: 11, dic: 12 };
 // Capisce: oggi, domani, "tra 5 giorni", "9/11", "9/11/2026", "9 novembre"
@@ -787,6 +787,7 @@ export class Store {
         else { const t = text.replace(/[^\d+ ]/g, '').trim(); if (t.replace(/\D/g, '').length < 6) return this.ask(chatId, 'Scrivi il numero di telefono, ad esempio <code>+39 333 123 4567</code>, oppure <b>-</b> per saltare.', mid, 'Telefono'); p.info.tel = t; }
         await this.refreshPanels(await this.acl(), chatId, c);
         this.startReq(c, uid, p.id); await save();
+        await this.del(chatId, mid);   // via dalla chat il messaggio con il numero
         const v = this.reqView(c, uid, d.who);
         return this.send(chatId, '✅ Dati salvati.\n\n' + v.text, v.kb);
       }
@@ -1016,6 +1017,11 @@ export class Store {
     };
   }
   // Richiesta ricette al medico: selezione dei farmaci e messaggio pronto per WhatsApp
+  waUrl(p, text) {
+    const tel = ((p.info || {}).tel || '').replace(/\D/g, '');
+    const num = tel.startsWith('00') ? tel.slice(2) : (tel.length === 10 && tel.startsWith('3') ? '39' + tel : tel);   // wa.me vuole il prefisso senza "+"
+    return 'https://wa.me/' + (num ? num : '') + '?text=' + encodeURIComponent(text);
+  }
   waRequest(p, meds, who) {
     const info = p.info || {};
     let wa = `Buongiorno${info.to ? ' ' + info.to : ''}, vorrei richiedere ${meds.length === 1 ? 'la ricetta' : 'le ricette'} per:\n*${info.full || p.name}*`;
@@ -1055,7 +1061,7 @@ export class Store {
       const p = c.persons.find(x => x.id === pid) || { name: '—' };
       const info = p.info || {};
       if (!info.full) missing = true;
-      const url = 'https://wa.me/?text=' + encodeURIComponent(this.waRequest(p, low.filter(m => m.person === pid)));
+      const url = this.waUrl(p, this.waRequest(p, low.filter(m => m.person === pid)));
       kb.push([{ text: `📤 Invia richiesta${info.to ? ' a ' + info.to : ''}${pids.length > 1 ? ' · ' + p.name : ''}`.slice(0, 60), url }]);
     }
     for (const m of low) if (m.pack) kb.push([
@@ -1064,8 +1070,7 @@ export class Store {
     ]);
     const noPack = low.filter(m => !m.pack);
     const sl = studioLine();
-    const ct = this.contact(c);
-    t += `\n\n${sl}${ct ? `\n📞 ${ct.to ? esc(ct.to) + ': ' : ''}${esc(ct.tel)}` : ''}`;
+    t += `\n\n${sl}`;
     t += `\n👉 Tocca <b>Invia richiesta</b> per mandare la richiesta delle ricette su WhatsApp.`;
     if (low.some(m => m.pack)) t += `\n👉 Quando un farmaco è stato ritirato in farmacia, tocca il suo pulsante <b>☑️</b> qui sotto (2 confezioni, oppure "1 conf."): la scorta si aggiorna e il farmaco esce dalla lista.`;
     if (noPack.length) t += `\n\n<i>Per avere il pulsante ☑️ anche per ${noPack.map(m => esc(m.name)).join(', ')}, nel gruppo principale imposta le compresse per confezione (/scorte → farmaco → ⚙️).</i>`;
@@ -1093,14 +1098,14 @@ export class Store {
     const info = p.info || {};
     const chosen = uniq.filter(m => rq.sel.includes(m.id));
     const wa = this.waRequest(p, chosen, who);
-    const text = `${studioLine()}\n\n📤 <b>Richiesta ricette</b> — ${esc(info.full || p.name)}${info.to ? '\nDestinatario: ' + esc(info.to) : ''}${info.tel ? ' · 📞 ' + esc(info.tel) : ''}${info.birth ? '\nData di nascita: ' + esc(info.birth) : ''}${info.cf ? '\nC.F. ' + esc(info.cf) : ''}\n\nTocca i farmaci per sceglierli (✅ = da richiedere). Sono già selezionati quelli con ${YELLOW_DAYS} giorni o meno.`;
+    const text = `${studioLine()}\n\n📤 <b>Richiesta ricette</b> — ${esc(info.full || p.name)}${info.to ? '\nDestinatario: ' + esc(info.to) : ''}${info.birth ? '\nData di nascita: ' + esc(info.birth) : ''}${info.cf ? '\nC.F. ' + esc(info.cf) : ''}\n\nTocca i farmaci per sceglierli (✅ = da richiedere). Sono già selezionati quelli con ${YELLOW_DAYS} giorni o meno.`;
     const kb = uniq.map(m => { const d = left(m); return [{ text: `${rq.sel.includes(m.id) ? '✅' : '⬜'} ${shortName(m.name)}${m.dose ? ' ' + m.dose : ''}${d != null ? ` · ${d} gg` : ''}`.slice(0, 60), callback_data: 'RT|' + m.id }]; });
-    if (chosen.length) kb.push([{ text: `📤 Invia su WhatsApp (${chosen.length})`, url: 'https://wa.me/?text=' + encodeURIComponent(wa) }]);
+    if (chosen.length) kb.push([{ text: `📤 Invia${info.to ? ' a ' + info.to : ''} su WhatsApp (${chosen.length})`.slice(0, 60), url: this.waUrl(p, wa) }]);
     kb.push([{ text: '✏️ Dati assistita', callback_data: 'RI|' + p.id }, { text: 'Chiudi', callback_data: 'RX' }]);
     return { text, kb: { inline_keyboard: kb } };
   }
   askTel(chatId, mid, to) {
-    return this.ask(chatId, `Numero di telefono ${to ? 'di <b>' + esc(to) + '</b>' : 'della segreteria'}? Lo mostro nella tabella degli orari e nel messaggio "Da ordinare", toccabile per chiamare.\nScrivi <b>-</b> per saltare.`, mid, 'Es. +39 333 123 4567');
+    return this.ask(chatId, `Numero di telefono ${to ? 'di <b>' + esc(to) + '</b>' : 'della segreteria'}? Serve solo per aprire WhatsApp direttamente sulla sua chat: <b>non verrà mostrato</b> nei gruppi.\nScrivi <b>-</b> per saltare.`, mid, 'Es. +39 333 123 4567');
   }
   askTo(chatId, mid) {
     return this.ask(chatId, 'A chi mandi la richiesta? Scrivi il nome per il saluto (es. <code>Vincenzo</code>), così il messaggio inizia con "Buongiorno Vincenzo".\nScrivi <b>-</b> per un semplice "Buongiorno".', mid, 'Es. Vincenzo');
