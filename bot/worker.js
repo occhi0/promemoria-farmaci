@@ -490,9 +490,9 @@ export class Store {
     if (acl.admin && acl.cmdv !== 7) await this.syncCommands(acl);
     if ((acl.wakes || []).some(w => w.at <= nowTs)) {
       for (const w of acl.wakes.filter(w => w.at <= nowTs)) {
-        const txt = `🟢 <b>Lo studio è aperto</b> (fino alle ${w.until}).\nEcco la richiesta ricette preparata${w.who ? ' da ' + esc(w.who) : ''}:\n\n${w.names.map(n => '• ' + esc(n)).join('\n')}\n\n👉 Tocca il pulsante qui sotto per inviarla${w.to ? ' a ' + esc(w.to) : ''} su WhatsApp.`;
+        const txt = `🟢 <b>Lo studio è aperto</b> (fino alle ${w.until}).\nEcco la richiesta ${w.kind === 'lab' ? 'analisi' : 'ricette'} preparata${w.who ? ' da ' + esc(w.who) : ''}:\n\n${w.names.map(n => '• ' + esc(n)).join('\n')}\n\n👉 Tocca il pulsante qui sotto per inviarla${w.to ? ' a ' + esc(w.to) : ''} su WhatsApp.`;
         const kb = { inline_keyboard: [[{ text: `📤 Invia${w.to ? ' a ' + w.to : ''} su WhatsApp`.slice(0, 60), url: w.url }]] };
-        const r = await this.send(w.chat, txt, kb);
+        const r = w.thread ? await this.inThread(w.chat, w.thread, () => this.send(w.chat, txt, kb)) : await this.send(w.chat, txt, kb);
         if (r.ok && w.mirror) { acl.temp = acl.temp || []; acl.temp.push({ chat: r._chat, mid: r.result.message_id, at: nowTs + 3 * 3600e3 }); }
       }
       acl.wakes = acl.wakes.filter(w => w.at > nowTs); await this.saveAcl(acl);
@@ -669,7 +669,7 @@ export class Store {
       if (!cmd && text === ORARI_BTN) { await this.del(chatId, msg.message_id); return this.sendTemp(acl, chatId, studioTable(this.contact(await this.chat(acl.mirrors[chatId]))), 5); }
       if (cmd) await this.del(chatId, msg.message_id);   // pagina pulita: via i comandi scritti
       if (cmd === '/oggi') {   // /oggi scritto in un topic lo rende il topic dei promemoria (in General: si torna in General)
-        const cur = (acl.home || {})[chatId] || null, want = this._thread ? this._thread.id : null;
+        const cur = (acl.home || {})[chatId] || null, want = this._thread && this._thread.id !== (acl.labThread || {})[chatId] ? this._thread.id : (this._thread ? cur : null);
         if (want !== cur) {
           acl.home = acl.home || {}; if (want) acl.home[chatId] = want; else delete acl.home[chatId];
           const P = (acl.panels || {})[chatId];
@@ -686,6 +686,10 @@ export class Store {
       }
       if (cmd === '/oggi') { const sc = await this.chat(src); await this.updatePanel(acl, chatId, sc, true); return this.updateOrders(acl, chatId, sc); }
       if (cmd === '/terapia') return this.mirrorTherapy(acl, chatId, await this.chat(src), acl.chats[src], true);
+      if (cmd === '/analisi' && this._thread) {   // scritto nel topic Analisi del gruppo semplice: lì compare l'elenco
+        acl.labThread = acl.labThread || {}; acl.labThread[chatId] = this._thread.id; await this.saveAcl(acl);
+        return this.refreshLabs(acl, src, await this.chat(src), true);
+      }
       if (cmd === '/orari') return this.sendTemp(acl, chatId, studioTable(this.contact(await this.chat(src))), 5);
       if (cmd === '/pulisci') {
         const sc = await this.chat(src); const P = (acl.panels || {})[chatId] || {};
@@ -923,14 +927,14 @@ export class Store {
           const ex = list.find(x => x.name.toLowerCase() === nm.toLowerCase());
           if (ex) { if (code) ex.code = code; } else list.push({ id: rid(), name: nm, code, added: today });
         }
-        delete c.flows[uid]; await save();
+        delete c.flows[uid]; await save(); await this.refreshLabs(await this.acl(), chatId, c);
         return this.showLabs(chatId, c, d.mid);
       }
       case 'lab_code': {
         c.labs = c.labs || { routine: [], occ: [] };
         const x = [...c.labs.routine, ...c.labs.occ].find(y => y.id === d.id);
         if (x) x.code = isSkip(text) || text.trim() === '-' ? '' : text.trim().slice(0, 30);
-        delete c.flows[uid]; await save();
+        delete c.flows[uid]; await save(); await this.refreshLabs(await this.acl(), chatId, c);
         const v = this.labsView(c, 'cod');
         const e = await this.edit(chatId, d.mid, v.text, v.kb); if (!e.ok && !/not modified/i.test(e.description || '')) return this.showLabs(chatId, c);
         return;
@@ -1133,6 +1137,8 @@ export class Store {
       for (const x of L.routine) kb.push([{ text: `🗑 ${x.name}`.slice(0, 60), callback_data: 'LD|' + x.id }]);
       for (const x of L.occ) kb.push([{ text: `🗑 ${x.name}`.slice(0, 60), callback_data: 'LD|' + x.id }]);
       kb.push([{ text: '⬅️ Fine', callback_data: 'LB' }]);
+    } else if (mode === 'mirror') {
+      if (L.routine.length || L.occ.length) kb.push([{ text: '📤 Richiedi analisi', callback_data: 'LQ' }]);
     } else if (mode === 'cod') {
       t += '\n\nTocca un\'analisi per scrivere o cambiare il suo codice:';
       for (const x of [...L.routine, ...L.occ]) kb.push([{ text: `🔢 ${x.name}${x.code ? ' · ' + x.code : ''}`.slice(0, 60), callback_data: 'LC|' + x.id }]);
@@ -1140,7 +1146,7 @@ export class Store {
     } else {
       for (const x of L.occ) kb.push([{ text: `✅ Fatta: ${x.name}`.slice(0, 60), callback_data: 'LD|' + x.id }]);
       kb.push([{ text: '➕ Routine', callback_data: 'LA|r' }, { text: '➕ Occasionale', callback_data: 'LA|o' }]);
-      if (L.routine.length || L.occ.length) kb.push([{ text: '🔢 Codici', callback_data: 'LK' }, { text: '🗑 Togli', callback_data: 'LX' }]);
+      if (L.routine.length || L.occ.length) kb.push([{ text: '🔢 Codici', callback_data: 'LK' }, { text: '🗑 Togli', callback_data: 'LX' }], [{ text: '📤 Richiedi analisi', callback_data: 'LQ' }]);
     }
     return { text: t, kb: { inline_keyboard: kb } };
   }
@@ -1148,6 +1154,47 @@ export class Store {
     const v = this.labsView(c);
     if (mid) { const r = await this.edit(chatId, mid, v.text, v.kb); if (r.ok || /not modified/i.test(r.description || '')) return; }
     return this.screen(chatId, 'analisi', v.text, v.kb);
+  }
+  // invia/modifica dentro un topic preciso (es. Analisi del gruppo semplice)
+  async inThread(chat, thread, fn) {
+    const old = this._thread; this._thread = thread ? { chat: String(chat), id: thread } : null;
+    try { return await fn(); } finally { this._thread = old; }
+  }
+  // elenco analisi (senza pulsanti di modifica) nel topic Analisi dei gruppi semplici
+  async refreshLabs(acl, srcId, c, force) {
+    for (const mc of this.mirrorsOf(acl, srcId)) {
+      const th = (acl.labThread || {})[mc]; if (!th) continue;
+      acl.panels = acl.panels || {}; const P = acl.panels[mc] = acl.panels[mc] || {};
+      const v = this.labsView(c, 'mirror');
+      if (P.labs && !force) { const e = await this.edit(mc, P.labs, v.text, v.kb); if (e.ok || /not modified/i.test(e.description || '')) continue; }
+      if (P.labs) await this.del(mc, P.labs);
+      const r = await this.inThread(mc, th, () => this.send(mc, v.text, v.kb));
+      if (r.ok) { P.labs = r.result.message_id; await this.saveAcl(acl); }
+    }
+  }
+  labPerson(c) { return c.persons.find(x => x.info && x.info.full) || c.persons[0] || { name: 'Mamma' }; }
+  labWa(p, items, who) {
+    const info = p.info || {};
+    let wa = `Buongiorno${info.to ? ' ' + info.to : ''}, vorrei richiedere la prescrizione per ${items.length === 1 ? 'questa analisi' : 'queste analisi'} per:\n*${info.full || p.name}*`;
+    if (info.birth) wa += `\nData di nascita: ${info.birth}`;
+    if (info.cf) wa += `\nC.F. ${info.cf}`;
+    return wa + '\n\n' + items.map(x => `• ${x.name}${x.code ? ' (cod. ' + x.code + ')' : ''}`).join('\n') + `\n\nGrazie${who ? ',\n' + who : ''}`;
+  }
+  labReqView(c, uid, who) {
+    const L = c.labs = c.labs || { routine: [], occ: [] };
+    const rq = (c.lreq || {})[uid]; if (!rq) return { text: 'Ricomincia da 📤 Richiedi analisi.', kb: { inline_keyboard: [] } };
+    const p = this.labPerson(c), info = p.info || {};
+    const all = [...L.routine, ...L.occ];
+    const chosen = all.filter(x => rq.sel.includes(x.id));
+    const text = `${studioLine()}\n\n📤 <b>Richiesta analisi</b> — ${esc(info.full || p.name)}${info.to ? '\nDestinatario: ' + esc(info.to) : ''}\n\nTocca le analisi per sceglierle (✅ = da richiedere).`;
+    const kb = all.map(x => [{ text: `${rq.sel.includes(x.id) ? '✅' : '⬜'} ${x.name}${x.code ? ' · ' + x.code : ''}`.slice(0, 60), callback_data: 'LT|' + x.id }]);
+    if (chosen.length) {
+      const url = this.waUrl(p, this.labWa(p, chosen, who));
+      if (!studioOpen()) kb.push([{ text: '⏰ Ricordamelo all\'apertura', callback_data: 'LW' }, { text: '📤 Invia comunque', url }]);
+      else kb.push([{ text: `📤 Invia${info.to ? ' a ' + info.to : ''} su WhatsApp (${chosen.length})`.slice(0, 60), url }]);
+    }
+    kb.push([{ text: 'Chiudi', callback_data: 'LQX' }]);
+    return { text, kb: { inline_keyboard: kb } };
   }
   todayView(c, panel) {
     const n = romeParts();
@@ -1429,7 +1476,7 @@ export class Store {
     const c = await this.chat(dataId);
     const [k, ...r] = data.split('|');
     const today = romeParts().date;
-    if (isMirror && !['T', 'S', 'Z', 'U', 'O', 'OR', 'TP', 'SA', 'OS', 'RQ', 'RT', 'RA', 'RS', 'RX', 'RW', 'RWo'].includes(k)) return ans();
+    if (isMirror && !['T', 'S', 'Z', 'U', 'O', 'OR', 'TP', 'SA', 'OS', 'RQ', 'RT', 'RA', 'RS', 'RX', 'RW', 'RWo', 'LQ', 'LT', 'LW', 'LQX'].includes(k)) return ans();
 
     if (['T', 'S', 'Z', 'U', 'O'].includes(k)) {
       const [date, medId, time] = r;
@@ -1526,6 +1573,30 @@ export class Store {
       await this.saveChat(dataId, c);
       return ans();
     }
+    if (['LQ', 'LT', 'LW', 'LQX'].includes(k)) {
+      const view = isMirror ? realId : chatId;
+      c.lreq = c.lreq || {}; c.labs = c.labs || { routine: [], occ: [] };
+      if (k === 'LQX') { delete c.lreq[uid]; await this.saveChat(dataId, c); await this.del(view, mid); return ans(); }
+      if (k === 'LQ') {
+        c.lreq[uid] = { sel: [...c.labs.routine, ...c.labs.occ].map(x => x.id) }; await this.saveChat(dataId, c);
+        const v = this.labReqView(c, uid, who); await this.screen(view, 'lreq', v.text, v.kb); return ans();
+      }
+      const rq = c.lreq[uid]; if (!rq) return ans('Ricomincia da 📤 Richiedi analisi');
+      if (k === 'LT') {
+        rq.sel = rq.sel.includes(r[0]) ? rq.sel.filter(x => x !== r[0]) : [...rq.sel, r[0]]; await this.saveChat(dataId, c);
+        const v = this.labReqView(c, uid, who); await this.edit(view, mid, v.text, v.kb); return ans();
+      }
+      // LW: richiesta pronta all'apertura dello studio, nello stesso topic
+      const no = nextOpening(); if (!no) return ans();
+      const p = this.labPerson(c);
+      const items = [...c.labs.routine, ...c.labs.occ].filter(x => rq.sel.includes(x.id));
+      if (!items.length) return ans('Nessuna analisi selezionata');
+      acl.wakes = (acl.wakes || []).filter(w => !(w.chat === view && w.by === uid && w.kind === 'lab'));
+      acl.wakes.push({ kind: 'lab', chat: view, thread: q.message.message_thread_id || null, by: uid, who, at: no.ts, until: no.until, to: (p.info || {}).to || '', names: items.map(x => x.name + (x.code ? ' (' + x.code + ')' : '')), url: this.waUrl(p, this.labWa(p, items, who)), mirror: isMirror });
+      await this.saveAcl(acl);
+      delete c.lreq[uid]; await this.saveChat(dataId, c); await this.del(view, mid);
+      return tg(this.env, 'answerCallbackQuery', { callback_query_id: q.id, text: `⏰ Ok! Ti avviso ${no.label}, quando lo studio apre.`, show_alert: true });
+    }
     if (['LB', 'LX', 'LA', 'LD', 'LK', 'LC'].includes(k)) {
       c.labs = c.labs || { routine: [], occ: [] };
       if (k === 'LB') { const v = this.labsView(c); await this.edit(chatId, mid, v.text, v.kb); return ans(); }
@@ -1541,7 +1612,7 @@ export class Store {
         const was = [...c.labs.routine, ...c.labs.occ].find(x => x.id === r[0]);
         const inDel = (q.message.reply_markup ? JSON.stringify(q.message.reply_markup) : '').includes('"LB"');
         c.labs.routine = c.labs.routine.filter(x => x.id !== r[0]); c.labs.occ = c.labs.occ.filter(x => x.id !== r[0]);
-        await this.saveChat(dataId, c);
+        await this.saveChat(dataId, c); await this.refreshLabs(acl, dataId, c);
         const v = this.labsView(c, inDel && (c.labs.routine.length || c.labs.occ.length) ? 'del' : undefined); await this.edit(chatId, mid, v.text, v.kb);
         return ans(was ? `Tolta: ${was.name}` : '');
       }
@@ -1567,7 +1638,7 @@ export class Store {
       }
       if (!p || !meds.length) return ans('Nessun farmaco selezionato');
       const target = isMirror ? realId : chatId;
-      acl.wakes = (acl.wakes || []).filter(w => !(w.chat === target && w.by === uid));   // una sola richiesta in attesa per persona
+      acl.wakes = (acl.wakes || []).filter(w => !(w.chat === target && w.by === uid && w.kind !== 'lab'));   // una sola richiesta in attesa per persona
       acl.wakes.push({ chat: target, by: uid, who, at: no.ts, until: no.until, to: (p.info || {}).to || '', names: meds.map(m => `${m.name}${m.dose ? ' ' + m.dose : ''}`), url: this.waUrl(p, this.waRequest(p, meds, who)), mirror: isMirror });
       await this.saveAcl(acl);
       if (k === 'RW' && isMirror) await this.del(chatId, mid);
