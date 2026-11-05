@@ -663,6 +663,7 @@ export class Store {
         if (isSkip(text)) m.pack = null;
         else { const v = firstNum(text); if (isNaN(v) || v <= 0) return this.ask(chatId, 'Scrivi solo il numero, ad esempio <code>30</code>.', mid, 'Es. 30'); m.pack = v; }
         delete c.flows[uid]; await save();
+        await this.refreshPanels(await this.acl(), chatId, c);
         const v = this.stockCard(c, m, d.fromAdd ? '✅ Salvato!' : '✅ Fatto.');
         return this.send(chatId, v.text, v.kb);
       }
