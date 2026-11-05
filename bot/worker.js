@@ -162,6 +162,7 @@ All'orario di ogni dose ti mando un messaggio con i pulsanti ✅ Preso, ⏰ ${SN
 /storico – terapie a tempo, in corso e concluse
 /terapia – elenco della terapia da mostrare al medico
 /esporta – copia di sicurezza completa
+/pulisci – ripulisce il gruppo (ultimi 2 giorni)
 /annulla – interrompi l'operazione in corso
 
 Puoi gestire anche i farmaci dei familiari: quando aggiungi un farmaco scegli per chi è. Per condividerli (ad esempio con le sorelle per i farmaci della mamma) crea un gruppo Telegram, aggiungimi e scrivi lì /start: nel gruppo potranno usarmi tutti.`;
@@ -175,6 +176,7 @@ const COMMANDS = [
   { command: 'terapia', description: 'Elenco della terapia per il medico' },
   { command: 'esporta', description: 'Copia di sicurezza completa' },
   { command: 'trasferisci', description: 'Sposta farmaci nel gruppo' },
+  { command: 'pulisci', description: 'Cancella i messaggi vecchi del gruppo' },
   { command: 'annulla', description: "Interrompi l'operazione in corso" },
   { command: 'aiuto', description: 'Come funziona' }
 ];
@@ -380,7 +382,7 @@ export class Store {
     await tg(this.env, 'setMyCommands', { commands: COMMANDS, scope: { type: 'all_private_chats' } });
     for (const id of Object.keys(acl.chats)) if (id.startsWith('-')) await tg(this.env, 'setMyCommands', { commands: COMMANDS, scope: { type: 'chat', chat_id: Number(id) } });
     for (const id of Object.keys(acl.mirrors || {})) await tg(this.env, 'deleteMyCommands', { scope: { type: 'chat', chat_id: Number(id) } });
-    acl.cmdv = 5; await this.saveAcl(acl);
+    acl.cmdv = 6; await this.saveAcl(acl);
   }
   // Pulsante fisso in basso (tastiera del bot). Senza "/" funziona solo se la privacy del bot nei gruppi è disattivata.
   async setBottomKb(acl, mc, force) {
@@ -453,7 +455,7 @@ export class Store {
   async tick(nowTs) {
     const n = romeParts(nowTs);
     const acl = await this.acl();
-    if (acl.admin && acl.cmdv !== 5) await this.syncCommands(acl);
+    if (acl.admin && acl.cmdv !== 6) await this.syncCommands(acl);
     if ((acl.temp || []).some(t => t.at <= nowTs)) {
       for (const t of acl.temp.filter(t => t.at <= nowTs)) await this.del(t.chat, t.mid);
       acl.temp = acl.temp.filter(t => t.at > nowTs); await this.saveAcl(acl);
@@ -550,6 +552,19 @@ export class Store {
     }
     await this.saveAcl(acl);
   }
+  // /pulisci: cancella gli ultimi messaggi del gruppo (Telegram permette solo quelli delle ultime 48 ore),
+  // tenendo i promemoria non ancora segnati e, nei gruppi semplici, pannello, terapia e "Da ordinare".
+  async purge(chatId, fromMid, c, keepExtra = []) {
+    const keep = new Set(keepExtra.filter(Boolean));
+    for (const [date, byKey] of Object.entries(c.sent || {}))
+      for (const [key, S] of Object.entries(byKey))
+        if (!this.getLog(c, date, key)) for (const [ch, m] of (S.msgs || (S.m ? [[chatId, S.m]] : []))) if (String(ch) === String(chatId)) keep.add(m);
+    const ids = [];
+    for (let m = fromMid; m > fromMid - 1500 && m > 0; m--) if (!keep.has(m)) ids.push(m);
+    let done = 0;
+    for (let i = 0; i < ids.length; i += 100) { const r = await tg(this.env, 'deleteMessages', { chat_id: chatId, message_ids: ids.slice(i, i + 100) }); if (r.ok) done++; }
+    return done;
+  }
   schedDel(acl, chat, mid, minutes) { acl.temp = acl.temp || []; if (!acl.temp.some(t => t.chat === String(chat) && t.mid === mid)) acl.temp.push({ chat: String(chat), mid, at: Date.now() + minutes * 60e3 }); }
   unschedDel(acl, pairs) { acl.temp = (acl.temp || []).filter(t => !pairs.some(([ch, m]) => String(ch) === t.chat && m === t.mid)); }
   // Schermate dei comandi nei gruppi: resta solo l'ultima di ogni tipo
@@ -610,6 +625,12 @@ export class Store {
       if (cmd === '/oggi') { const sc = await this.chat(src); await this.updatePanel(acl, chatId, sc, true); return this.updateOrders(acl, chatId, sc); }
       if (cmd === '/terapia') return this.mirrorTherapy(acl, chatId, await this.chat(src), acl.chats[src], true);
       if (cmd === '/orari') return this.sendTemp(acl, chatId, studioTable(this.contact(await this.chat(src))), 5);
+      if (cmd === '/pulisci') {
+        const sc = await this.chat(src); const P = (acl.panels || {})[chatId] || {};
+        await this.purge(chatId, msg.message_id, sc, [P.oggi, P.terapia, P.orders]);
+        acl.temp = (acl.temp || []).filter(t => t.chat !== chatId); await this.saveAcl(acl);
+        await this.updatePanel(acl, chatId, sc, true); return this.updateOrders(acl, chatId, sc);
+      }
       if (cmd === '/scollega' && uid === acl.admin) {
         delete acl.mirrors[chatId]; await this.saveAcl(acl);
         await tg(this.env, 'deleteMyCommands', { scope: { type: 'chat', chat_id: Number(chatId) } });
@@ -658,6 +679,13 @@ export class Store {
           return this.screen(chatId, 'scorte', this.stockView(c) + '\n\nTocca un farmaco per aggiungere una confezione.', { inline_keyboard: rows });
         }
         case '/storico': return this.screen(chatId, 'storico', this.historyView(c));
+        case '/pulisci': {
+          if (priv) return this.send(chatId, 'Questo comando si usa nei gruppi.');
+          await this.purge(chatId, msg.message_id, c);
+          const a1 = await this.acl(); if (a1.scr) delete a1.scr[chatId]; if (a1.fm) for (const k of Object.keys(a1.fm)) if (k.startsWith(chatId + ':')) delete a1.fm[k]; await this.saveAcl(a1);
+          const v = this.todayView(c);
+          return this.screen(chatId, 'oggi', '🧹 Pulito!\n\n' + v.text, v.kb);
+        }
         case '/esporta': return this.send(chatId, this.exportView(c, msg.chat.title));
         case '/terapia': return this.sendTherapy(chatId, c, msg.chat.title);
         case '/trasferisci': {
