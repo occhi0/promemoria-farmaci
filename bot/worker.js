@@ -575,7 +575,7 @@ export class Store {
   async tidyFlow(up) {
     const msg = up.message, q = up.callback_query;
     const chatId = String(msg ? msg.chat.id : q && q.message ? q.message.chat.id : '');
-    const uid = String(msg ? (msg.from || {}).id : (q.from || {}).id);
+    const uid = String(msg ? (msg.from || {}).id : ((q && q.from) || {}).id);
     if (!chatId.startsWith('-')) return;
     const acl = await this.acl();
     const id = (acl.migrated || {})[chatId] || chatId;
@@ -599,6 +599,10 @@ export class Store {
   // tenendo i promemoria non ancora segnati e, nei gruppi semplici, pannello, terapia e "Da ordinare".
   async purge(chatId, fromMid, c, keepExtra = []) {
     const keep = new Set(keepExtra.filter(Boolean));
+    const a = await this.acl();   // nei gruppi con i topic non tocchiamo il messaggio iniziale dei topic (cancellarlo può eliminare il topic)
+    for (const bag of ['home', 'labThread']) if (a[bag] && a[bag][chatId]) keep.add(a[bag][chatId]);
+    const P0 = (a.panels || {})[chatId]; if (P0 && P0.labs) keep.add(P0.labs);
+    const S0 = (a.scr || {})[chatId]; if (S0 && S0.analisi) keep.add(S0.analisi);
     const known = [];   // promemoria già segnati: il bot conosce i loro id
     for (const [date, byKey] of Object.entries(c.sent || {}))
       for (const [key, S] of Object.entries(byKey)) {
@@ -693,9 +697,11 @@ export class Store {
       if (cmd === '/orari') return this.sendTemp(acl, chatId, studioTable(this.contact(await this.chat(src))), 5);
       if (cmd === '/pulisci') {
         const sc = await this.chat(src); const P = (acl.panels || {})[chatId] || {};
-        await this.purge(chatId, msg.message_id, sc, [P.oggi, P.terapia, P.orders]);
+        const pr = await this.purge(chatId, msg.message_id, sc, [P.oggi, P.terapia, P.orders]);
         acl.temp = (acl.temp || []).filter(t => t.chat !== chatId); await this.saveAcl(acl);
-        await this.updatePanel(acl, chatId, sc, true); return this.updateOrders(acl, chatId, sc);
+        await this.updatePanel(acl, chatId, sc, true); await this.updateOrders(acl, chatId, sc); await this.refreshLabs(acl, src, sc);
+        if (!pr.bulkOk && pr.err) return this.sendTemp(acl, chatId, '⚠️ Non sono riuscito a cancellare i messaggi: ' + esc(pr.err), 3);
+        return;
       }
       if (cmd === '/scollega' && uid === acl.admin) {
         delete acl.mirrors[chatId]; await this.saveAcl(acl);
@@ -759,8 +765,9 @@ export class Store {
           if (priv) return this.send(chatId, 'Questo comando si usa nei gruppi.');
           const pr = await this.purge(chatId, msg.message_id, c);
           const a1 = await this.acl();
-          for (const m of Object.values((a1.scr || {})[chatId] || {})) await this.del(chatId, m);   // via anche le schermate precedenti
-          if (a1.scr) a1.scr[chatId] = {};
+          const keepA = ((a1.scr || {})[chatId] || {}).analisi;
+          for (const [t, m] of Object.entries((a1.scr || {})[chatId] || {})) if (t !== 'analisi') await this.del(chatId, m);   // via anche le schermate precedenti (l'elenco analisi resta)
+          if (a1.scr) a1.scr[chatId] = keepA ? { analisi: keepA } : {};
           if (a1.fm) for (const k of Object.keys(a1.fm)) if (k.startsWith(chatId + ':')) delete a1.fm[k];
           await this.saveAcl(a1);
           const v = this.todayView(c);
