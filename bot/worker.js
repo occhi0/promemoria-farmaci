@@ -697,7 +697,8 @@ export class Store {
       if (cmd === '/orari') return this.sendTemp(acl, chatId, studioTable(this.contact(await this.chat(src))), 5);
       if (cmd === '/pulisci') {
         const sc = await this.chat(src); const P = (acl.panels || {})[chatId] || {};
-        const pr = await this.purge(chatId, msg.message_id, sc, [P.oggi, P.terapia, P.orders]);
+        const pr = await this.purge(chatId, msg.message_id, sc, [P.oggi, P.orders]);   // la Terapia si cancella: si riapre col pulsante 🩺
+        if (P.terapia) { await this.del(chatId, P.terapia); delete P.terapia; }
         acl.temp = (acl.temp || []).filter(t => t.chat !== chatId); await this.saveAcl(acl);
         await this.updatePanel(acl, chatId, sc, true); await this.updateOrders(acl, chatId, sc); await this.refreshLabs(acl, src, sc);
         if (!pr.bulkOk && pr.err) return this.sendTemp(acl, chatId, '⚠️ Non sono riuscito a cancellare i messaggi: ' + esc(pr.err), 3);
