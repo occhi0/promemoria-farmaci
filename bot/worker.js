@@ -894,9 +894,24 @@ export class Store {
         const today = romeParts().date;
         const names = text.split(/[,;\n]+/).map(x => x.trim()).filter(Boolean).slice(0, 30);
         const list = d.kind === 'r' ? c.labs.routine : c.labs.occ;
-        for (const nm of names) if (!list.some(x => x.name.toLowerCase() === nm.toLowerCase())) list.push({ id: rid(), name: nm.slice(0, 60), added: today });
+        for (const raw of names) {
+          // codice in fondo: solo cifre con punti/trattini/barre, almeno 3 caratteri (es. 90.62.2)
+          const mm = raw.match(/^(.*?)[\s:=–-]+(\d[\d.\/-]{2,})$/);
+          const nm = (mm && mm[1].trim() ? mm[1].trim() : raw).slice(0, 60), code = mm && mm[1].trim() ? mm[2] : '';
+          const ex = list.find(x => x.name.toLowerCase() === nm.toLowerCase());
+          if (ex) { if (code) ex.code = code; } else list.push({ id: rid(), name: nm, code, added: today });
+        }
         delete c.flows[uid]; await save();
         return this.showLabs(chatId, c, d.mid);
+      }
+      case 'lab_code': {
+        c.labs = c.labs || { routine: [], occ: [] };
+        const x = [...c.labs.routine, ...c.labs.occ].find(y => y.id === d.id);
+        if (x) x.code = isSkip(text) || text.trim() === '-' ? '' : text.trim().slice(0, 30);
+        delete c.flows[uid]; await save();
+        const v = this.labsView(c, 'cod');
+        const e = await this.edit(chatId, d.mid, v.text, v.kb); if (!e.ok && !/not modified/i.test(e.description || '')) return this.showLabs(chatId, c);
+        return;
       }
       case 'pinfo_name': case 'pinfo_birth': case 'pinfo_cf': {
         const p = c.persons.find(x => x.id === d.pid);
@@ -1087,18 +1102,23 @@ export class Store {
   labsView(c, mode) {
     const L = c.labs = c.labs || { routine: [], occ: [] };
     let t = '🩸 <b>Analisi</b>\n';
-    t += '\n<b>Di routine</b>' + (L.routine.length ? L.routine.map(x => `\n• ${esc(x.name)}`).join('') : '\n<i>nessuna</i>');
-    t += '\n\n<b>Occasionali</b>' + (L.occ.length ? L.occ.map(x => `\n• ${esc(x.name)} <i>(dal ${fmtDate(x.added)})</i>`).join('') : '\n<i>nessuna</i>');
+    const cod = x => x.code ? ` — <code>${esc(x.code)}</code>` : '';
+    t += '\n<b>Di routine</b>' + (L.routine.length ? L.routine.map(x => `\n• ${esc(x.name)}${cod(x)}`).join('') : '\n<i>nessuna</i>');
+    t += '\n\n<b>Occasionali</b>' + (L.occ.length ? L.occ.map(x => `\n• ${esc(x.name)}${cod(x)} <i>(dal ${fmtDate(x.added)})</i>`).join('') : '\n<i>nessuna</i>');
     const kb = [];
     if (mode === 'del') {
       t += '\n\nTocca un\'analisi per toglierla:';
       for (const x of L.routine) kb.push([{ text: `🗑 ${x.name}`.slice(0, 60), callback_data: 'LD|' + x.id }]);
       for (const x of L.occ) kb.push([{ text: `🗑 ${x.name}`.slice(0, 60), callback_data: 'LD|' + x.id }]);
       kb.push([{ text: '⬅️ Fine', callback_data: 'LB' }]);
+    } else if (mode === 'cod') {
+      t += '\n\nTocca un\'analisi per scrivere o cambiare il suo codice:';
+      for (const x of [...L.routine, ...L.occ]) kb.push([{ text: `🔢 ${x.name}${x.code ? ' · ' + x.code : ''}`.slice(0, 60), callback_data: 'LC|' + x.id }]);
+      kb.push([{ text: '⬅️ Fine', callback_data: 'LB' }]);
     } else {
       for (const x of L.occ) kb.push([{ text: `✅ Fatta: ${x.name}`.slice(0, 60), callback_data: 'LD|' + x.id }]);
       kb.push([{ text: '➕ Routine', callback_data: 'LA|r' }, { text: '➕ Occasionale', callback_data: 'LA|o' }]);
-      if (L.routine.length || L.occ.length) kb.push([{ text: '🗑 Togli', callback_data: 'LX' }]);
+      if (L.routine.length || L.occ.length) kb.push([{ text: '🔢 Codici', callback_data: 'LK' }, { text: '🗑 Togli', callback_data: 'LX' }]);
     }
     return { text: t, kb: { inline_keyboard: kb } };
   }
@@ -1484,10 +1504,17 @@ export class Store {
       await this.saveChat(dataId, c);
       return ans();
     }
-    if (['LB', 'LX', 'LA', 'LD'].includes(k)) {
+    if (['LB', 'LX', 'LA', 'LD', 'LK', 'LC'].includes(k)) {
       c.labs = c.labs || { routine: [], occ: [] };
       if (k === 'LB') { const v = this.labsView(c); await this.edit(chatId, mid, v.text, v.kb); return ans(); }
       if (k === 'LX') { const v = this.labsView(c, 'del'); await this.edit(chatId, mid, v.text, v.kb); return ans(); }
+      if (k === 'LK') { const v = this.labsView(c, 'cod'); await this.edit(chatId, mid, v.text, v.kb); return ans(); }
+      if (k === 'LC') {
+        const x = [...c.labs.routine, ...c.labs.occ].find(y => y.id === r[0]); if (!x) return ans();
+        c.flows[uid] = { step: 'lab_code', d: { id: x.id, mid } }; await this.saveChat(dataId, c);
+        await this.ask(chatId, `Codice di <b>${esc(x.name)}</b>?` + (x.code ? `\nOra è <code>${esc(x.code)}</code>. Scrivi <b>-</b> per toglierlo.` : ''), null, 'Es. 90.62.2');
+        return ans();
+      }
       if (k === 'LD') {
         const was = [...c.labs.routine, ...c.labs.occ].find(x => x.id === r[0]);
         const inDel = (q.message.reply_markup ? JSON.stringify(q.message.reply_markup) : '').includes('"LB"');
@@ -1498,7 +1525,7 @@ export class Store {
       }
       // LA: aggiunta
       c.flows[uid] = { step: 'lab_add', d: { kind: r[0], mid } }; await this.saveChat(dataId, c);
-      await this.ask(chatId, r[0] === 'r' ? 'Quali analisi di <b>routine</b>? Puoi scriverne più di una separate da virgola, ad esempio:\n<code>Emocromo, Creatinina, Potassio, INR</code>' : 'Quale analisi <b>occasionale</b>? Ad esempio <code>Urinocoltura</code>', null, 'Es. Emocromo, Creatinina');
+      await this.ask(chatId, (r[0] === 'r' ? 'Quali analisi di <b>routine</b>? Puoi scriverne più di una separate da virgola.' : 'Quale analisi <b>occasionale</b>?') + '\nSe vuoi, metti il codice dopo il nome, ad esempio:\n<code>' + (r[0] === 'r' ? 'Emocromo 90.62.2, Creatinina 90.16.3' : 'Urinocoltura 90.94.2') + '</code>', null, 'Es. Emocromo 90.62.2');
       return ans();
     }
     if (k === 'RW' || k === 'RWo') {
