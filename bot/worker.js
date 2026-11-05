@@ -1209,6 +1209,7 @@ export class Store {
     for (const x of extra) kb.push([{ text: `${rq.sel.includes(x.id) ? '✅' : '⬜'} ${shortName(x.name)} · solo ora`.slice(0, 60), callback_data: 'RT|' + x.id }]);
     kb.push([{ text: '➕ Altro farmaco', callback_data: 'RA' }]);
     if (chosen.length) kb.push([{ text: `📤 Invia${info.to ? ' a ' + info.to : ''} su WhatsApp (${chosen.length})`.slice(0, 60), url: this.waUrl(p, wa) }]);
+    if (!mirror && !info.tel) kb.push([{ text: `📞 Numero di ${info.to || 'segreteria'} (per WhatsApp)`.slice(0, 60), callback_data: 'RN|' + p.id }]);
     kb.push(mirror ? [{ text: 'Chiudi', callback_data: 'RX' }] : [{ text: '✏️ Dati assistita', callback_data: 'RI|' + p.id }, { text: 'Chiudi', callback_data: 'RX' }]);
     return { text, kb: { inline_keyboard: kb } };
   }
@@ -1404,6 +1405,13 @@ export class Store {
       const v = this.reqView(c, uid, who); const r1 = await this.screen(chatId, 'ricette', v.text, v.kb);
       if (r1.ok) c.flows[uid].req.mid = r1.result.message_id;
       await this.saveChat(dataId, c);
+      return ans();
+    }
+    if (k === 'RN') {
+      const p = c.persons.find(x => x.id === r[0]);
+      if (!p) return ans();
+      c.flows[uid] = { step: 'pinfo_tel', d: { pid: p.id, who } }; await this.saveChat(dataId, c);
+      await this.askTel(chatId, null, (p.info || {}).to);
       return ans();
     }
     if (k === 'RA') {
