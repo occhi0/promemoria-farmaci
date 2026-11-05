@@ -391,7 +391,8 @@ export class Store {
     const until = addDays(romeParts().date, days).date;
     const howLong = m.stock === 0 ? '<b>sono finite</b>' : `bastano per ${days < 1 ? 'meno di un giorno' : 'circa ' + days + (days === 1 ? ' giorno' : ' giorni')}${days >= 1 ? ` (fino a ${fmtDate(until)})` : ''}`;
     const text = `${level === LAST_STOCK_DAYS ? '⚠️ <b>Ultimo avviso scorte</b>' : '📦 <b>Scorte in esaurimento</b>'}\n<b>${esc(m.name)}</b>${m.dose ? ' ' + esc(m.dose) : ''}${this.pp(c, m.person)}: restano ${m.stock} compresse, ${howLong}.\nRicordati ricetta e farmacia. Quando lo ricomprate, toccate qui sotto.`;
-    return { text, kb: this.packKb(m) };
+    const kb = this.packKb(m); kb.inline_keyboard.push([{ text: '📤 Richiedi ricette', callback_data: 'RQ' }]);
+    return { text, kb };
   }
   unlog(c, date, key, m) {
     const e = this.getLog(c, date, key);
