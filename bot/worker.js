@@ -543,6 +543,10 @@ export class Store {
     acl.mirrors = acl.mirrors || {};
     if (acl.mirrors[chatId]) {
       const src = acl.mirrors[chatId];
+      if (!cmd && text) {
+        const sc0 = await this.chat(src); const fl0 = sc0.flows[uid];
+        if (fl0 && fl0.step === 'occ_name') return this.occName(src, sc0, uid, fl0, text, msg.message_id);
+      }
       if (!cmd && text === ORARI_BTN) { await this.del(chatId, msg.message_id); return this.sendTemp(acl, chatId, studioTable(this.contact(await this.chat(acl.mirrors[chatId]))), 5); }
       if (cmd) await this.del(chatId, msg.message_id);   // pagina pulita: via i comandi scritti
       if (cmd) await this.setBottomKb(acl, chatId);
@@ -750,6 +754,7 @@ export class Store {
         const v = this.planView(c, m);
         return this.send(chatId, '✅ Cambio programmato.\n\n' + v.text, v.kb);
       }
+      case 'occ_name': return this.occName(chatId, c, uid, fl, text, mid);
       case 'pinfo_name': case 'pinfo_birth': case 'pinfo_cf': {
         const p = c.persons.find(x => x.id === d.pid);
         if (!p) { delete c.flows[uid]; await save(); return this.send(chatId, 'Persona non trovata.'); }
@@ -789,7 +794,9 @@ export class Store {
         this.startReq(c, uid, p.id); await save();
         await this.del(chatId, mid);   // via dalla chat il messaggio con il numero
         const v = this.reqView(c, uid, d.who);
-        return this.send(chatId, '✅ Dati salvati.\n\n' + v.text, v.kb);
+        const r1 = await this.send(chatId, '✅ Dati salvati.\n\n' + v.text, v.kb);
+        if (r1.ok && c.flows[uid] && c.flows[uid].req) { c.flows[uid].req.mid = r1.result.message_id; await save(); }
+        return r1;
       }
       case 'psince': {
         const m = c.meds.find(x => x.id === d.med); const today = romeParts().date;
@@ -897,12 +904,12 @@ export class Store {
   therapyView(c, title) {
     const n = romeParts();
     const active = c.meds.filter(m => !m.paused && !this.ended(m, n.date));
-    if (!active.length) return 'Non ci sono terapie in corso.';
+    if (!active.length && !(c.occ || []).length) return 'Non ci sono terapie in corso.';
     const freq = k => k === 1 ? '1 volta al giorno' : `${k} volte al giorno`;
     const hh = ts => ts.map(t => t.endsWith(':00') ? String(+t.slice(0, 2)) : t.replace(/^0/, '')).join(', ');
     const [y, mo, d] = n.date.split('-').map(Number);
     const dateLong = new Date(Date.UTC(y, mo - 1, d)).toLocaleDateString('it-IT', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
-    const persons = [...new Set(active.map(m => m.person))];
+    const persons = [...new Set([...active.map(m => m.person), ...(c.occ || []).map(o => o.person)])];
     let t = `🩺 <b>Terapia in corso</b>${persons.length === 1 ? ' — ' + esc(this.person(c, persons[0])) : ''}\nAggiornata al ${dateLong}\n`;
     for (const pid of persons) {
       if (persons.length > 1) t += `\n<b>${esc(this.person(c, pid))}</b>`;
@@ -927,13 +934,15 @@ export class Store {
         t += `\n• <b>${esc(m.name)}</b>${m.dose ? ' ' + esc(m.dose) : ''} ${line}`;
         if (m.notes) t += ` (${esc(m.notes)})`;
       }
+      const occ = (c.occ || []).filter(o => o.person === pid);
+      if (occ.length) t += `\n\n<b>Al bisogno</b>` + occ.map(o => `\n• <b>${esc(o.name)}</b>`).join('');
       t += '\n';
     }
     return t;
   }
   todayView(c, panel) {
     const n = romeParts();
-    const pkb = panel ? { inline_keyboard: [[{ text: '🔄 Aggiorna', callback_data: 'OR' }, { text: '🩺 Terapia', callback_data: 'TP' }]] } : undefined;
+    const pkb = panel ? { inline_keyboard: [[{ text: '🔄 Aggiorna', callback_data: 'OR' }, { text: '🩺 Terapia', callback_data: 'TP' }, { text: '📤 Ricette', callback_data: 'RQ' }]] } : undefined;
     if (!c.meds.length) return { text: 'Non ci sono ancora farmaci. Usa /aggiungi per inserirne uno.', kb: pkb };
     const ds = this.dosesOn(c, n.date, n.dow);
     if (!ds.length) return { text: `📅 <b>Oggi, ${fmtDate(n.date)}</b>\nNessuna dose prevista.`, kb: pkb };
@@ -948,13 +957,13 @@ export class Store {
       return `${ic} ${d.time}  ${this.multi(c) ? '<b>' + esc(this.person(c, d.m.person)) + '</b> · ' : ''}${esc(d.m.name)}${d.m.dose ? ' ' + esc(d.m.dose) : ''}${panel && e && e.by ? ' · <i>' + esc(e.by) + '</i>' : ''}`;
     });
     const text = `📅 <b>Oggi, ${fmtDate(n.date)}</b>\n${taken} di ${ds.length} dosi prese\n\n${lines.join('\n')}${kb.length ? '\n\nTocca per segnare come prese:' : ''}`;
-    kb.push(panel ? [{ text: '🔄 Aggiorna', callback_data: 'OR' }, { text: '🩺 Terapia', callback_data: 'TP' }] : [{ text: '🔄 Aggiorna', callback_data: 'OR' }]);
+    kb.push(panel ? [{ text: '🔄 Aggiorna', callback_data: 'OR' }, { text: '🩺 Terapia', callback_data: 'TP' }, { text: '📤 Ricette', callback_data: 'RQ' }] : [{ text: '🔄 Aggiorna', callback_data: 'OR' }]);
     return { text: panel ? text + `\n\n<i>Quando arriva un promemoria tocca ✅ Preso (⏰ per rimandare, ⏭ per saltare). Aggiornato alle ${n.hm}.</i>` : text, kb: { inline_keyboard: kb } };
   }
   medsView(c) {
     const today = romeParts().date;
     const done = c.meds.filter(m => this.ended(m, today));
-    const doneBtn = done.length ? [[{ text: `🗂 Terapie concluse (${done.length})`, callback_data: 'MC' }]] : [];
+    const doneBtn = [...(done.length ? [[{ text: `🗂 Terapie concluse (${done.length})`, callback_data: 'MC' }]] : []), ...((c.occ || []).length ? [[{ text: `💊 Al bisogno (${c.occ.length})`, callback_data: 'OL' }]] : [])];
     const act = c.meds.filter(m => !this.ended(m, today));
     if (!act.length) return { text: 'Non ci sono farmaci in corso. Usa /aggiungi per inserirne uno.', kb: doneBtn.length ? { inline_keyboard: doneBtn } : undefined };
     const order = id => c.persons.findIndex(p => p.id === id);
@@ -1085,7 +1094,7 @@ export class Store {
     const r = await this.send(mc, t, markup);
     if (r.ok) { P.orders = r.result.message_id; P.orderKeys = keys; P.studio = sl; await this.saveAcl(acl); }
   }
-  reqView(c, uid, who) {
+  reqView(c, uid, who, mirror) {
     const fl = c.flows[uid]; const rq = fl && fl.req;
     if (!rq) return { text: 'Ricomincia da /scorte.' };
     const p = c.persons.find(x => x.id === rq.pid);
@@ -1096,13 +1105,28 @@ export class Store {
       .sort((a, b) => (left(a) ?? Infinity) - (left(b) ?? Infinity) || a.name.localeCompare(b.name, 'it', { sensitivity: 'base' }));
     const seen = new Set(); const uniq = ms.filter(m => { const k = (m.name + '|' + m.dose).toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
     const info = p.info || {};
-    const chosen = uniq.filter(m => rq.sel.includes(m.id));
+    const occ = (c.occ || []).filter(o => o.person === rq.pid);
+    const extra = rq.extra || [];
+    const chosen = [...uniq, ...occ, ...extra].filter(m => rq.sel.includes(m.id));
     const wa = this.waRequest(p, chosen, who);
     const text = `${studioLine()}\n\n📤 <b>Richiesta ricette</b> — ${esc(info.full || p.name)}${info.to ? '\nDestinatario: ' + esc(info.to) : ''}${info.birth ? '\nData di nascita: ' + esc(info.birth) : ''}${info.cf ? '\nC.F. ' + esc(info.cf) : ''}\n\nTocca i farmaci per sceglierli (✅ = da richiedere). Sono già selezionati quelli con ${YELLOW_DAYS} giorni o meno.`;
     const kb = uniq.map(m => { const d = left(m); return [{ text: `${rq.sel.includes(m.id) ? '✅' : '⬜'} ${shortName(m.name)}${m.dose ? ' ' + m.dose : ''}${d != null ? ` · ${d} gg` : ''}`.slice(0, 60), callback_data: 'RT|' + m.id }]; });
+    for (const o of occ) kb.push([{ text: `${rq.sel.includes(o.id) ? '✅' : '⬜'} ${shortName(o.name)} · al bisogno`.slice(0, 60), callback_data: 'RT|' + o.id }]);
+    for (const x of extra) kb.push([{ text: `${rq.sel.includes(x.id) ? '✅' : '⬜'} ${shortName(x.name)} · solo ora`.slice(0, 60), callback_data: 'RT|' + x.id }]);
+    kb.push([{ text: '➕ Altro farmaco', callback_data: 'RA' }]);
     if (chosen.length) kb.push([{ text: `📤 Invia${info.to ? ' a ' + info.to : ''} su WhatsApp (${chosen.length})`.slice(0, 60), url: this.waUrl(p, wa) }]);
-    kb.push([{ text: '✏️ Dati assistita', callback_data: 'RI|' + p.id }, { text: 'Chiudi', callback_data: 'RX' }]);
+    kb.push(mirror ? [{ text: 'Chiudi', callback_data: 'RX' }] : [{ text: '✏️ Dati assistita', callback_data: 'RI|' + p.id }, { text: 'Chiudi', callback_data: 'RX' }]);
     return { text, kb: { inline_keyboard: kb } };
+  }
+  // "Altro farmaco" nella richiesta: dopo il nome chiediamo se salvarlo tra i farmaci al bisogno
+  async occName(dataId, c, uid, fl, text, answerMid) {
+    const view = fl.d.view;
+    if (fl.d.q) await this.del(view, fl.d.q);
+    if (answerMid) await this.del(view, answerMid);
+    fl.d.name = text.slice(0, 60); fl.step = 'occ_save';
+    await this.saveChat(dataId, c);
+    return this.send(view, `<b>${esc(fl.d.name)}</b>: lo salvo tra i farmaci <b>al bisogno</b>? Comparirà in /terapia e nelle prossime richieste, senza promemoria.`,
+      { inline_keyboard: [[{ text: '💾 Sì, salvalo', callback_data: 'RS|y' }, { text: 'Solo questa volta', callback_data: 'RS|n' }]] });
   }
   askTel(chatId, mid, to) {
     return this.ask(chatId, `Numero di telefono ${to ? 'di <b>' + esc(to) + '</b>' : 'della segreteria'}? Serve solo per aprire WhatsApp direttamente sulla sua chat: <b>non verrà mostrato</b> nei gruppi.\nScrivi <b>-</b> per saltare.`, mid, 'Es. +39 333 123 4567');
@@ -1191,7 +1215,7 @@ export class Store {
     const c = await this.chat(dataId);
     const [k, ...r] = data.split('|');
     const today = romeParts().date;
-    if (isMirror && !['T', 'S', 'Z', 'U', 'O', 'OR', 'TP', 'SA', 'OS'].includes(k)) return ans();
+    if (isMirror && !['T', 'S', 'Z', 'U', 'O', 'OR', 'TP', 'SA', 'OS', 'RQ', 'RT', 'RA', 'RS', 'RX'].includes(k)) return ans();
 
     if (['T', 'S', 'Z', 'U', 'O'].includes(k)) {
       const [date, medId, time] = r;
@@ -1251,6 +1275,14 @@ export class Store {
       }
       const p = c.persons.find(x => x.id === pid);
       if (!p) return ans();
+      if (isMirror) {   // gruppo semplice: niente domande sui dati, la richiesta si cancella da sola dopo 15 minuti
+        this.startReq(c, uid, p.id);
+        const v = this.reqView(c, uid, who, true);
+        const r0 = await this.send(realId, v.text + ((p.info && p.info.full) ? '' : '\n\n<i>Dati dell\'assistita non impostati: chiedi ad Antonietta di inserirli.</i>'), v.kb);
+        if (r0.ok) { c.flows[uid].req.mid = r0.result.message_id; acl.temp = acl.temp || []; acl.temp.push({ chat: r0._chat, mid: r0.result.message_id, at: Date.now() + 15 * 60e3 }); await this.saveAcl(acl); }
+        await this.saveChat(dataId, c);
+        return ans();
+      }
       if (k !== 'RI' && p.info && p.info.full && p.info.to !== undefined && p.info.tel === undefined) {
         c.flows[uid] = { step: 'pinfo_tel', d: { pid: p.id, who } }; await this.saveChat(dataId, c);
         await this.askTel(chatId, null, p.info.to);
@@ -1266,9 +1298,33 @@ export class Store {
         await this.ask(chatId, `Per la richiesta al medico mi servono i dati dell'assistita (li ricordo per le prossime volte).\n\nNome e cognome di <b>${esc(p.name)}</b>?`, null, 'Es. Maria Rossi');
         return ans();
       }
-      this.startReq(c, uid, p.id); await this.saveChat(dataId, c);
-      const v = this.reqView(c, uid, who); await this.send(chatId, v.text, v.kb);
+      this.startReq(c, uid, p.id);
+      const v = this.reqView(c, uid, who); const r1 = await this.send(chatId, v.text, v.kb);
+      if (r1.ok) c.flows[uid].req.mid = r1.result.message_id;
+      await this.saveChat(dataId, c);
       return ans();
+    }
+    if (k === 'RA') {
+      const fl2 = c.flows[uid];
+      if (!fl2 || !fl2.req) return ans('Ricomincia dalla richiesta ricette');
+      fl2.step = 'occ_name'; fl2.d = { view: isMirror ? realId : chatId };
+      const q = await this.ask(isMirror ? realId : chatId, 'Quale farmaco? Scrivi nome e dosaggio, ad esempio <code>Monuril 3 g</code>.', null, 'Es. Monuril 3 g');
+      if (q.ok) fl2.d.q = q.result.message_id;
+      await this.saveChat(dataId, c);
+      return ans();
+    }
+    if (k === 'RS') {
+      const fl2 = c.flows[uid];
+      if (!fl2 || !fl2.req || !fl2.d || !fl2.d.name) return ans();
+      const id = (r[0] === 'y' ? 'o' : 'x') + rid();
+      if (r[0] === 'y') { c.occ = c.occ || []; c.occ.push({ id, person: fl2.req.pid, name: fl2.d.name, dose: '' }); }
+      else { fl2.req.extra = fl2.req.extra || []; fl2.req.extra.push({ id, name: fl2.d.name, dose: '' }); }
+      fl2.req.sel.push(id);
+      await this.del(chatId, mid);
+      fl2.step = 'req'; fl2.d = {};
+      await this.saveChat(dataId, c);
+      if (fl2.req.mid) { const v = this.reqView(c, uid, who, isMirror); await this.edit(isMirror ? realId : chatId, fl2.req.mid, v.text, v.kb); }
+      return ans(r[0] === 'y' ? 'Salvato tra i farmaci al bisogno' : 'Aggiunto a questa richiesta');
     }
     if (k === 'RT') {
       const fl2 = c.flows[uid];
@@ -1276,10 +1332,10 @@ export class Store {
       const id = r[0]; const sel = fl2.req.sel;
       fl2.req.sel = sel.includes(id) ? sel.filter(x => x !== id) : [...sel, id];
       await this.saveChat(dataId, c);
-      const v = this.reqView(c, uid, who); await this.edit(chatId, mid, v.text, v.kb);
+      const v = this.reqView(c, uid, who, isMirror); await this.edit(chatId, mid, v.text, v.kb);
       return ans();
     }
-    if (k === 'RX') { delete c.flows[uid]; await this.saveChat(dataId, c); await this.edit(chatId, mid, 'Richiesta chiusa.'); return ans(); }
+    if (k === 'RX') { delete c.flows[uid]; await this.saveChat(dataId, c); if (isMirror) await this.del(chatId, mid); else await this.edit(chatId, mid, 'Richiesta chiusa.'); return ans(); }
     if (k === 'OR') { const v = this.todayView(c); await this.edit(chatId, mid, v.text, v.kb); return ans('Aggiornato'); }
 
     if (k === 'TR') {
@@ -1338,6 +1394,13 @@ export class Store {
     }
 
     // gestione farmaci
+    if (k === 'OL' || k === 'OX') {
+      if (k === 'OX') c.occ = (c.occ || []).filter(o => o.id !== r[0]), await this.saveChat(dataId, c);
+      const occ = c.occ || [];
+      await this.edit(chatId, mid, occ.length ? '💊 <b>Farmaci al bisogno</b>\nCompaiono in /terapia e nella richiesta ricette, senza promemoria. Tocca 🗑 per toglierne uno.' : 'Nessun farmaco al bisogno.',
+        { inline_keyboard: [...occ.map(o => [{ text: `🗑 ${o.name}`.slice(0, 60), callback_data: 'OX|' + o.id }]), [{ text: '⬅️ Elenco', callback_data: 'ML' }]] });
+      return ans(k === 'OX' ? 'Tolto' : '');
+    }
     if (k === 'MC') { const v = this.doneView(c); await this.edit(chatId, mid, v.text, v.kb); return ans(); }
     if (k === 'ML') { const v = this.medsView(c); await this.edit(chatId, mid, v.text, v.kb); return ans(); }
     const m = c.meds.find(x => x.id === r[0]);
