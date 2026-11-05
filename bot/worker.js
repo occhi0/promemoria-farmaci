@@ -308,7 +308,7 @@ export class Store {
     const kb = [];
     if (m.pack) kb.push([{ text: `➕ 1 conf. (+${m.pack})`, callback_data: `SA|${m.id}|1` }, { text: `➕ 2 conf. (+${m.pack * 2})`, callback_data: `SA|${m.id}|2` }]);
     else kb.push([{ text: '⚙️ Imposta compresse per confezione', callback_data: 'PK|' + m.id }]);
-    kb.push([{ text: '✏️ Scrivi il numero', callback_data: 'MS|' + m.id }].concat(m.pack ? [{ text: '⚙️ Confezione', callback_data: 'PK|' + m.id }] : []));
+    kb.push([{ text: '✏️ Giacenza', callback_data: 'MS|' + m.id }].concat(m.pack ? [{ text: '⚙️ Confezione', callback_data: 'PK|' + m.id }] : []));
     kb.push([{ text: '⬅️ Farmaco', callback_data: 'MM|' + m.id }]);
     return { text: t, kb: { inline_keyboard: kb } };
   }
@@ -779,7 +779,7 @@ export class Store {
         const alert = this.stockAlert(c, m);
         delete c.flows[uid]; await save();
         await this.refreshPanels(await this.acl(), chatId, c);
-        await this.send(chatId, m.stock == null ? `Scorte di <b>${esc(m.name)}</b> non più conteggiate.` : `📦 Scorte di <b>${esc(m.name)}</b>: ${m.stock} unità.`);
+        await this.send(chatId, m.stock == null ? `Scorte di <b>${esc(m.name)}</b> non più conteggiate.` : `📦 Giacenza di <b>${esc(m.name)}</b>: ${m.stock} compresse.`);
         if (alert) await this.send(chatId, alert.text, alert.kb);
         return;
       }
@@ -1359,7 +1359,7 @@ export class Store {
     }
     if (k === 'MS') {
       c.flows[uid] = { step: 'restock', d: { med: m.id } }; await this.saveChat(dataId, c);
-      await this.ask(chatId, `Quante unità di <b>${esc(m.name)}</b> hai adesso?${m.stock != null ? ` (ora: ${m.stock})` : ''}\nScrivi <b>-</b> per non contarle.`, null, 'Es. 30');
+      await this.ask(chatId, `Giacenza di <b>${esc(m.name)}</b>: quante compresse avete adesso?${m.stock != null ? ` (ora: ${m.stock})` : ''}\nScrivi <b>-</b> per non contarle.`, null, 'Es. 30');
       return ans();
     }
     if (k === 'MD') {
