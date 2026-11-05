@@ -668,6 +668,15 @@ export class Store {
       }
       if (!cmd && text === ORARI_BTN) { await this.del(chatId, msg.message_id); return this.sendTemp(acl, chatId, studioTable(this.contact(await this.chat(acl.mirrors[chatId]))), 5); }
       if (cmd) await this.del(chatId, msg.message_id);   // pagina pulita: via i comandi scritti
+      if (cmd === '/oggi') {   // /oggi scritto in un topic lo rende il topic dei promemoria (in General: si torna in General)
+        const cur = (acl.home || {})[chatId] || null, want = this._thread ? this._thread.id : null;
+        if (want !== cur) {
+          acl.home = acl.home || {}; if (want) acl.home[chatId] = want; else delete acl.home[chatId];
+          const P = (acl.panels || {})[chatId];
+          if (P) { for (const k of ['oggi', 'terapia', 'orders']) if (P[k]) await this.del(chatId, P[k]); for (const k of ['oggi', 'terapia', 'orders', 'orderKeys', 'pinned', 'day']) delete P[k]; }
+          await this.saveAcl(acl); await this.setBottomKb(acl, chatId, true);
+        }
+      }
       if (cmd) await this.setBottomKb(acl, chatId);
       if ((cmd === '/oggi' || cmd === '/terapia') && ((acl.mcv || {})[chatId] || 0) < 4) {
         acl.mcv = acl.mcv || {}; acl.mcv[chatId] = 4; await this.saveAcl(acl);
