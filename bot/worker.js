@@ -992,7 +992,10 @@ export class Store {
       const url = 'https://wa.me/?text=' + encodeURIComponent(this.waRequest(p, low.filter(m => m.person === pid)));
       kb.push([{ text: `📤 Invia richiesta${info.to ? ' a ' + info.to : ''}${pids.length > 1 ? ' · ' + p.name : ''}`.slice(0, 60), url }]);
     }
-    for (const m of low) if (m.pack) kb.push([{ text: `☑️ Ritirato ${m.name} (+${m.pack})`.slice(0, 60), callback_data: `SA|${m.id}|1` }]);
+    for (const m of low) if (m.pack) kb.push([
+      { text: `☑️ Ritirato ${m.name} · 2 conf. (+${m.pack * 2})`.slice(0, 60), callback_data: `SA|${m.id}|2` },
+      { text: `1 conf. (+${m.pack})`, callback_data: `SA|${m.id}|1` }
+    ]);
     const noPack = low.filter(m => !m.pack);
     t += `\n\n👉 Tocca <b>Invia richiesta</b> per mandare la richiesta delle ricette su WhatsApp.`;
     if (low.some(m => m.pack)) t += `\n👉 Quando un farmaco è stato ritirato in farmacia, tocca <b>Ritirato</b>: la scorta si aggiorna e il farmaco esce dalla lista.`;
