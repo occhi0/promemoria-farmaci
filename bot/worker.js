@@ -1235,7 +1235,7 @@ export class Store {
   }
   todayView(c, panel) {
     const n = romeParts();
-    const pkb = panel ? { inline_keyboard: [[{ text: '🔄 Aggiorna', callback_data: 'OR' }, { text: '🩺 Terapia', callback_data: 'TP' }, { text: '📤 Ricette', callback_data: 'RQ' }]] } : undefined;
+    const pkb = panel ? { inline_keyboard: [[{ text: '🔄', callback_data: 'OR' }, { text: '🩺 Terapia', callback_data: 'TP' }, { text: '📤 Ricette', callback_data: 'RQ' }]] } : undefined;
     if (!c.meds.length) return { text: 'Non ci sono ancora farmaci. Usa /aggiungi per inserirne uno.', kb: pkb };
     const ds = this.dosesOn(c, n.date, n.dow);
     if (!ds.length) return { text: `📅 <b>Oggi, ${fmtDate(n.date)}</b>\nNessuna dose prevista.`, kb: pkb };
@@ -1250,7 +1250,7 @@ export class Store {
       return `${ic} ${d.time}  ${this.multi(c) ? '<b>' + esc(this.person(c, d.m.person)) + '</b> · ' : ''}${esc(d.m.name)}${d.m.dose ? ' ' + esc(d.m.dose) : ''}${panel && e && e.by ? ' · <i>' + esc(e.by) + '</i>' : ''}`;
     });
     const text = `📅 <b>Oggi, ${fmtDate(n.date)}</b>\n${taken} di ${ds.length} dosi prese\n\n${lines.join('\n')}${kb.length ? '\n\nTocca per segnare come prese:' : ''}`;
-    kb.push(panel ? [{ text: '🔄 Aggiorna', callback_data: 'OR' }, { text: '🩺 Terapia', callback_data: 'TP' }, { text: '📤 Ricette', callback_data: 'RQ' }] : [{ text: '🔄 Aggiorna', callback_data: 'OR' }]);
+    kb.push(panel ? [{ text: '🔄', callback_data: 'OR' }, { text: '🩺 Terapia', callback_data: 'TP' }, { text: '📤 Ricette', callback_data: 'RQ' }] : [{ text: '🔄 Aggiorna', callback_data: 'OR' }]);
     return { text: panel ? text + `\n\n<i>Quando arriva un promemoria tocca ✅ Preso (⏰ per rimandare, ⏭ per saltare). Aggiornato alle ${n.hm}.</i>` : text, kb: { inline_keyboard: kb } };
   }
   medsView(c) {
