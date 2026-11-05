@@ -939,7 +939,7 @@ export class Store {
         const list = d.kind === 'r' ? c.labs.routine : c.labs.occ;
         for (const raw of names) {
           // codice in fondo: solo cifre con punti/trattini/barre, almeno 3 caratteri (es. 90.62.2)
-          const mm = raw.match(/^(.*?)[\s:=–-]+(\d[\d.\/-]{2,})$/);
+          const mm = raw.match(/^(.*?)[\s:=–-]+(\d+\.[\dA-Za-z.]+|\d{3,})$/);   // es. 90.62.2, 91.35.G, 96101
           const nm = (mm && mm[1].trim() ? mm[1].trim() : raw).slice(0, 60), code = mm && mm[1].trim() ? mm[2] : '';
           const ex = list.find(x => x.name.toLowerCase() === nm.toLowerCase());
           if (ex) { if (code) ex.code = code; } else list.push({ id: rid(), name: nm, code, added: today });
