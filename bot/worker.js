@@ -321,7 +321,7 @@ export class Store {
     const days = Math.floor(left);
     const until = addDays(romeParts().date, days).date;
     const howLong = m.stock === 0 ? '<b>sono finite</b>' : `bastano per ${days < 1 ? 'meno di un giorno' : 'circa ' + days + (days === 1 ? ' giorno' : ' giorni')}${days >= 1 ? ` (fino a ${fmtDate(until)})` : ''}`;
-    const text = `${level === LAST_STOCK_DAYS ? '⚠️ <b>Ultimo avviso scorte</b>' : '📦 <b>Scorte in esaurimento</b>'}\n<b>${esc(m.name)}</b>${m.dose ? ' ' + esc(m.dose) : ''}${this.pp(c, m.person)}: restano ${m.stock} unità, ${howLong}.\nRicordati ricetta e farmacia. Quando lo ricomprate, toccate qui sotto.`;
+    const text = `${level === LAST_STOCK_DAYS ? '⚠️ <b>Ultimo avviso scorte</b>' : '📦 <b>Scorte in esaurimento</b>'}\n<b>${esc(m.name)}</b>${m.dose ? ' ' + esc(m.dose) : ''}${this.pp(c, m.person)}: restano ${m.stock} compresse, ${howLong}.\nRicordati ricetta e farmacia. Quando lo ricomprate, toccate qui sotto.`;
     return { text, kb: this.packKb(m) };
   }
   unlog(c, date, key, m) {
@@ -796,7 +796,7 @@ export class Store {
   medText(c, m) {
     const today = romeParts().date, next = (m.plan || []).filter(p => p.from > today).sort((a, b) => a.from < b.from ? -1 : 1)[0];
     const extra = (next ? `\n🔁 dal ${fmtDate(next.from)}: ${next.times.join(', ')}` : '') + (m.end ? `\n🏁 ${this.ended(m, today) ? 'terminata il' : 'fino al'} ${fmtDate(m.end)}` : '');
-    return `<b>${esc(m.name)}</b>${m.dose ? ' ' + esc(m.dose) : ''}${m.paused ? ' ⏸ <i>in pausa</i>' : ''}${this.multi(c) ? '\n👤 ' + esc(this.person(c, m.person)) : ''}\n🕐 ${m.times.join(', ')} · ${daysText(m.days)}${m.stock != null ? `\n📦 ${m.stock} unità` : ''}` + extra;
+    return `<b>${esc(m.name)}</b>${m.dose ? ' ' + esc(m.dose) : ''}${m.paused ? ' ⏸ <i>in pausa</i>' : ''}${this.multi(c) ? '\n👤 ' + esc(this.person(c, m.person)) : ''}\n🕐 ${m.times.join(', ')} · ${daysText(m.days)}${m.stock != null ? `\n📦 ${m.stock} compresse` : ''}` + extra;
   }
   therapyMsg(c, title) {
     const text = this.therapyView(c, title);
@@ -946,7 +946,7 @@ export class Store {
     return {
       text: this.medText(c, m), kb: {
         inline_keyboard: [
-          [{ text: '✏️ Nome', callback_data: 'ME|' + m.id + '|name' }, { text: '✏️ Dosaggio', callback_data: 'ME|' + m.id + '|dose' }, { text: '🕐 Orari', callback_data: 'ME|' + m.id + '|times' }],
+          [{ text: '✏️ Nome', callback_data: 'ME|' + m.id + '|name' }, { text: '✏️ Dose', callback_data: 'ME|' + m.id + '|dose' }, { text: '🕐 Orari', callback_data: 'ME|' + m.id + '|times' }],
           [{ text: '👤 Persona', callback_data: 'MW|' + m.id }, { text: m.paused ? '▶️ Riprendi' : '⏸ Pausa', callback_data: 'MP|' + m.id }, { text: '📦 Scorte', callback_data: 'SK|' + m.id }],
           [{ text: '📆 Programma', callback_data: 'MT|' + m.id }, this.ended(m, romeParts().date) ? { text: '♻️ Riattiva', callback_data: 'MR|' + m.id } : { text: '🗂 Archivia', callback_data: 'MA|' + m.id }],
           [{ text: '🗑 Elimina', callback_data: 'MD|' + m.id }, { text: '⬅️ Elenco', callback_data: 'ML' }]
@@ -1047,7 +1047,7 @@ export class Store {
       if (m.stock == null) return `⚪ ${esc(m.name)}${this.pp(c, m.person)}: non conteggiate`;
       const left = m.stock / this.perDay(m), d = Math.floor(left);
       const dot = left <= LOW_STOCK_DAYS ? '🔴' : left <= YELLOW_DAYS ? '🟡' : '🟢';
-      const txt = `${esc(m.name)}${this.pp(c, m.person)}: ${m.stock} unità, ${d < 1 ? 'meno di un giorno' : 'circa ' + d + (d === 1 ? ' giorno' : ' giorni')}`;
+      const txt = `${esc(m.name)}${this.pp(c, m.person)}: ${m.stock} compresse, ${d < 1 ? 'meno di un giorno' : 'circa ' + d + (d === 1 ? ' giorno' : ' giorni')}`;
       return `${dot} ${dot === '🔴' ? '<b>' + txt + '</b>' : txt}`;
     });
     return `📦 <b>Scorte</b>\n\n${lines.join('\n')}\n\n🟢 più di ${YELLOW_DAYS} giorni · 🟡 ${YELLOW_DAYS} giorni o meno · 🔴 ${LOW_STOCK_DAYS} giorni o meno · ⚪ non conteggiate`;
