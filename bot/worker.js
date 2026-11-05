@@ -78,6 +78,14 @@ function studioLine(ts = Date.now()) {
   }
   return '🔴 Studio chiuso';
 }
+function studioTable() {
+  const fmt = sl => sl ? `${hmShort(sl[0])}–${hmShort(sl[1])}` : '—';
+  const row = (lbl, d) => {
+    const am = STUDIO[d].find(x => toMin(x[0]) < 13 * 60), pm = STUDIO[d].find(x => toMin(x[0]) >= 13 * 60);
+    return `${lbl.padEnd(4)}${fmt(am).padEnd(12)}${fmt(pm)}`;
+  };
+  return `🕐 <b>Orari dello studio medico</b>\n${studioLine()}\n\n<pre>    Mattina     Pomeriggio\n${[['Lun', 1], ['Mar', 2], ['Mer', 3], ['Gio', 4], ['Ven', 5]].map(([l, d]) => row(l, d)).join('\n')}\nSab e Dom: chiuso</pre>\n<i>Questo messaggio si cancella da solo tra 5 minuti.</i>`;
+}
 const MONTHS = { gen: 1, feb: 2, mar: 3, apr: 4, mag: 5, giu: 6, lug: 7, ago: 8, set: 9, ott: 10, nov: 11, dic: 12 };
 // Capisce: oggi, domani, "tra 5 giorni", "9/11", "9/11/2026", "9 novembre"
 function parseDate(text, today) {
@@ -367,6 +375,10 @@ export class Store {
     for (const id of Object.keys(acl.mirrors || {})) await tg(this.env, 'deleteMyCommands', { scope: { type: 'chat', chat_id: Number(id) } });
     acl.cmdv = 5; await this.saveAcl(acl);
   }
+  async sendTemp(acl, mc, text, minutes) {
+    const r = await this.send(mc, text);
+    if (r.ok) { acl.temp = acl.temp || []; acl.temp.push({ chat: r._chat || String(mc), mid: r.result.message_id, at: Date.now() + minutes * 60e3 }); await this.saveAcl(acl); }
+  }
   mirrorsOf(acl, src) { return Object.keys(acl.mirrors || {}).filter(k => acl.mirrors[k] === src); }
   // aggiorna tutte le copie del promemoria (gruppo principale e gruppo semplice), tranne quella già modificata
   async syncCopies(c, srcId, date, key, exceptChat, exceptMid, text, kb, skip) {
@@ -428,6 +440,10 @@ export class Store {
     const n = romeParts(nowTs);
     const acl = await this.acl();
     if (acl.admin && acl.cmdv !== 5) await this.syncCommands(acl);
+    if ((acl.temp || []).some(t => t.at <= nowTs)) {
+      for (const t of acl.temp.filter(t => t.at <= nowTs)) await this.del(t.chat, t.mid);
+      acl.temp = acl.temp.filter(t => t.at > nowTs); await this.saveAcl(acl);
+    }
     for (const chatId of Object.keys(acl.chats)) {
       const c = await this.chat(chatId);
       let changed = false;
@@ -528,6 +544,7 @@ export class Store {
       }
       if (cmd === '/oggi') { const sc = await this.chat(src); await this.updatePanel(acl, chatId, sc, true); return this.updateOrders(acl, chatId, sc); }
       if (cmd === '/terapia') return this.mirrorTherapy(acl, chatId, await this.chat(src), acl.chats[src], true);
+      if (cmd === '/orari') return this.sendTemp(acl, chatId, studioTable(), 5);
       if (cmd === '/scollega' && uid === acl.admin) {
         delete acl.mirrors[chatId]; await this.saveAcl(acl);
         await tg(this.env, 'deleteMyCommands', { scope: { type: 'chat', chat_id: Number(chatId) } });
@@ -895,7 +912,7 @@ export class Store {
   }
   todayView(c, panel) {
     const n = romeParts();
-    const pkb = panel ? { inline_keyboard: [[{ text: '🔄 Aggiorna', callback_data: 'OR' }, { text: '🩺 Terapia', callback_data: 'TP' }]] } : undefined;
+    const pkb = panel ? { inline_keyboard: [[{ text: '🔄 Aggiorna', callback_data: 'OR' }, { text: '🩺 Terapia', callback_data: 'TP' }, { text: '🕐 Orari', callback_data: 'OS' }]] } : undefined;
     if (!c.meds.length) return { text: 'Non ci sono ancora farmaci. Usa /aggiungi per inserirne uno.', kb: pkb };
     const ds = this.dosesOn(c, n.date, n.dow);
     if (!ds.length) return { text: `📅 <b>Oggi, ${fmtDate(n.date)}</b>\nNessuna dose prevista.`, kb: pkb };
@@ -910,7 +927,7 @@ export class Store {
       return `${ic} ${d.time}  ${this.multi(c) ? '<b>' + esc(this.person(c, d.m.person)) + '</b> · ' : ''}${esc(d.m.name)}${d.m.dose ? ' ' + esc(d.m.dose) : ''}${panel && e && e.by ? ' · <i>' + esc(e.by) + '</i>' : ''}`;
     });
     const text = `📅 <b>Oggi, ${fmtDate(n.date)}</b>\n${taken} di ${ds.length} dosi prese\n\n${lines.join('\n')}${kb.length ? '\n\nTocca per segnare come prese:' : ''}`;
-    kb.push(panel ? [{ text: '🔄 Aggiorna', callback_data: 'OR' }, { text: '🩺 Terapia', callback_data: 'TP' }] : [{ text: '🔄 Aggiorna', callback_data: 'OR' }]);
+    kb.push(panel ? [{ text: '🔄 Aggiorna', callback_data: 'OR' }, { text: '🩺 Terapia', callback_data: 'TP' }, { text: '🕐 Orari', callback_data: 'OS' }] : [{ text: '🔄 Aggiorna', callback_data: 'OR' }]);
     return { text: panel ? text + `\n\n<i>Quando arriva un promemoria tocca ✅ Preso (⏰ per rimandare, ⏭ per saltare). Aggiornato alle ${n.hm}.</i>` : text, kb: { inline_keyboard: kb } };
   }
   medsView(c) {
@@ -1140,7 +1157,7 @@ export class Store {
     const c = await this.chat(dataId);
     const [k, ...r] = data.split('|');
     const today = romeParts().date;
-    if (isMirror && !['T', 'S', 'Z', 'U', 'O', 'OR', 'TP', 'SA'].includes(k)) return ans();
+    if (isMirror && !['T', 'S', 'Z', 'U', 'O', 'OR', 'TP', 'SA', 'OS'].includes(k)) return ans();
 
     if (['T', 'S', 'Z', 'U', 'O'].includes(k)) {
       const [date, medId, time] = r;
@@ -1181,6 +1198,7 @@ export class Store {
       if (low) await this.send(dataId, low.text, low.kb);
       return ans(answer);
     }
+    if (k === 'OS' && isMirror) { await this.sendTemp(acl, realId, studioTable(), 5); return ans('Orari qui sotto 👇'); }
     if (k === 'TP' && isMirror) { await this.mirrorTherapy(acl, realId, c, acl.chats[dataId], true); return ans('Terapia qui sotto 👇'); }
     if (k === 'OR' && isMirror) {
       if (realId !== chatId) await this.del(chatId, mid);   // pannello vecchio: lo togliamo
