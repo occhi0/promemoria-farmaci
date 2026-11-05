@@ -698,8 +698,7 @@ export class Store {
           if (a1.fm) for (const k of Object.keys(a1.fm)) if (k.startsWith(chatId + ':')) delete a1.fm[k];
           await this.saveAcl(a1);
           const v = this.todayView(c);
-          const note = pr.bulkOk ? '' : `\n\n<i>Alcuni messaggi non si possono cancellare: sono più vecchi di 2 giorni o di prima che il gruppo diventasse "supergruppo". Quelli vanno tolti a mano.</i>`;
-          return this.screen(chatId, 'oggi', '🧹 Pulito!' + note + '\n\n' + v.text, v.kb);
+          return this.screen(chatId, 'oggi', '🧹 Pulito!\n\n' + v.text, v.kb);
         }
         case '/esporta': return this.send(chatId, this.exportView(c, msg.chat.title));
         case '/terapia': return this.sendTherapy(chatId, c, msg.chat.title);
