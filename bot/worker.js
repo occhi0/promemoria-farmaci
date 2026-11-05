@@ -939,7 +939,7 @@ export class Store {
         const list = d.kind === 'r' ? c.labs.routine : c.labs.occ;
         for (const raw of names) {
           // codice in fondo: solo cifre con punti/trattini/barre, almeno 3 caratteri (es. 90.62.2)
-          const mm = raw.match(/^(.*?)[\s:=–-]+(\d+\.[\dA-Za-z.]+|\d{3,})$/);   // es. 90.62.2, 91.35.G, 96101
+          const mm = raw.match(/^(.*?)[\s:=–-]+(\d+\.[\dA-Za-z.]+(?:\s*\(\d+\))?|\d{3,})$/);   // es. 90.62.2, 91.35.G, 90.62.2 (75201)
           const nm = (mm && mm[1].trim() ? mm[1].trim() : raw).slice(0, 60), code = mm && mm[1].trim() ? mm[2] : '';
           const ex = list.find(x => x.name.toLowerCase() === nm.toLowerCase());
           if (ex) { if (code) ex.code = code; } else list.push({ id: rid(), name: nm, code, added: today });
@@ -1195,7 +1195,7 @@ export class Store {
     let wa = `Buongiorno${info.to ? ' ' + info.to : ''}, vorrei richiedere la prescrizione per ${items.length === 1 ? 'questa analisi' : 'queste analisi'} per:\n*${info.full || p.name}*`;
     if (info.birth) wa += `\nData di nascita: ${info.birth}`;
     if (info.cf) wa += `\nC.F. ${info.cf}`;
-    return wa + '\n\n' + items.map(x => `• ${x.name}${x.code ? ' (cod. ' + x.code + ')' : ''}`).join('\n') + `\n\nGrazie${who ? ',\n' + who : ''}`;
+    return wa + '\n\n' + items.map(x => `• ${x.name}${x.code ? ' – cod. ' + x.code : ''}`).join('\n') + `\n\nGrazie${who ? ',\n' + who : ''}`;
   }
   labReqView(c, uid, who) {
     const L = c.labs = c.labs || { routine: [], occ: [] };
@@ -1609,7 +1609,7 @@ export class Store {
       const items = [...c.labs.routine, ...c.labs.occ].filter(x => rq.sel.includes(x.id));
       if (!items.length) return ans('Nessuna analisi selezionata');
       acl.wakes = (acl.wakes || []).filter(w => !(w.chat === view && w.by === uid && w.kind === 'lab'));
-      acl.wakes.push({ kind: 'lab', chat: view, thread: q.message.message_thread_id || null, by: uid, who, at: no.ts, until: no.until, to: (p.info || {}).to || '', names: items.map(x => x.name + (x.code ? ' (' + x.code + ')' : '')), url: this.waUrl(p, this.labWa(p, items, who)), mirror: isMirror });
+      acl.wakes.push({ kind: 'lab', chat: view, thread: q.message.message_thread_id || null, by: uid, who, at: no.ts, until: no.until, to: (p.info || {}).to || '', names: items.map(x => x.name + (x.code ? ' – ' + x.code : '')), url: this.waUrl(p, this.labWa(p, items, who)), mirror: isMirror });
       await this.saveAcl(acl);
       delete c.lreq[uid]; await this.saveChat(dataId, c); await this.del(view, mid);
       return tg(this.env, 'answerCallbackQuery', { callback_query_id: q.id, text: `⏰ Ok! Ti avviso ${no.label}, quando lo studio apre.`, show_alert: true });
