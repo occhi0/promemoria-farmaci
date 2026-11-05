@@ -63,6 +63,7 @@ const STUDIO = {
   0: [], 1: [['16:30', '19:00']], 2: [['08:30', '10:30'], ['16:30', '18:30']], 3: [['08:30', '11:30']],
   4: [['16:30', '19:00']], 5: [['08:30', '11:30']], 6: []
 };
+const ORARI_BTN = '🕐 Orari studio medico';
 const DOW_FULL = ['domenica', 'lunedì', 'martedì', 'mercoledì', 'giovedì', 'venerdì', 'sabato'];
 const hmShort = t => t.replace(/^0/, '');
 function studioLine(ts = Date.now()) {
@@ -375,12 +376,12 @@ export class Store {
     for (const id of Object.keys(acl.mirrors || {})) await tg(this.env, 'deleteMyCommands', { scope: { type: 'chat', chat_id: Number(id) } });
     acl.cmdv = 5; await this.saveAcl(acl);
   }
-  // Pulsante fisso in basso (tastiera del bot). Inizia con "/" così arriva al bot anche con la privacy dei gruppi.
-  async setBottomKb(acl, mc) {
+  // Pulsante fisso in basso (tastiera del bot). Senza "/" funziona solo se la privacy del bot nei gruppi è disattivata.
+  async setBottomKb(acl, mc, force) {
     acl.mcv = acl.mcv || {};
-    if ((acl.mcv[mc] || 0) >= 6) return;
-    const r = await this.send(mc, '🕐 Pulsante degli orari dello studio attivato qui sotto.', { keyboard: [[{ text: '/orari 🕐 Orari studio' }]], resize_keyboard: true, is_persistent: true });
-    if (r.ok) { acl.mcv[r._chat || mc] = 6; acl.temp = acl.temp || []; acl.temp.push({ chat: r._chat || String(mc), mid: r.result.message_id, at: Date.now() + 60e3 }); await this.saveAcl(acl); }
+    if (!force && (acl.mcv[mc] || 0) >= 7) return;
+    const r = await this.send(mc, '🕐 Pulsante degli orari dello studio attivato qui sotto.', { keyboard: [[{ text: ORARI_BTN }]], resize_keyboard: true, is_persistent: true });
+    if (r.ok) { acl.mcv[r._chat || mc] = 7; acl.temp = acl.temp || []; acl.temp.push({ chat: r._chat || String(mc), mid: r.result.message_id, at: Date.now() + 60e3 }); await this.saveAcl(acl); }
   }
   async sendTemp(acl, mc, text, minutes) {
     const r = await this.send(mc, text);
@@ -542,6 +543,7 @@ export class Store {
     acl.mirrors = acl.mirrors || {};
     if (acl.mirrors[chatId]) {
       const src = acl.mirrors[chatId];
+      if (!cmd && text === ORARI_BTN) { await this.del(chatId, msg.message_id); return this.sendTemp(acl, chatId, studioTable(), 5); }
       if (cmd) await this.del(chatId, msg.message_id);   // pagina pulita: via i comandi scritti
       if (cmd) await this.setBottomKb(acl, chatId);
       if ((cmd === '/oggi' || cmd === '/terapia') && ((acl.mcv || {})[chatId] || 0) < 4) {
