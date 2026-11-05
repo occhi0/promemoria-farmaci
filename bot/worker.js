@@ -182,6 +182,7 @@ All'orario di ogni dose ti mando un messaggio con i pulsanti ✅ Preso, ⏰ ${SN
 /farmaci – elenco, modifica, pausa, scorte, elimina
 /scorte – compresse rimaste
 /storico – terapie a tempo, in corso e concluse
+/analisi – elenco delle analisi (meglio nel topic 🩸 Analisi)
 /terapia – elenco della terapia da mostrare al medico
 /esporta – copia di sicurezza completa
 /pulisci – ripulisce il gruppo (ultimi 2 giorni)
@@ -198,6 +199,7 @@ const COMMANDS = [
   { command: 'terapia', description: 'Elenco della terapia per il medico' },
   { command: 'esporta', description: 'Copia di sicurezza completa' },
   { command: 'trasferisci', description: 'Sposta farmaci nel gruppo' },
+  { command: 'analisi', description: 'Elenco delle analisi del sangue' },
   { command: 'pulisci', description: 'Cancella i messaggi vecchi del gruppo' },
   { command: 'annulla', description: "Interrompi l'operazione in corso" },
   { command: 'aiuto', description: 'Come funziona' }
@@ -286,7 +288,8 @@ export class Store {
     if (touched) { acl.cmdv = 0; await this.saveAcl(acl); console.log('migrato', oldId, '→', newId); }
   }
   async send(chatId, text, markup, extra = {}) {
-    const body = { chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true, ...(markup ? { reply_markup: markup } : {}), ...extra };
+    const thread = this._thread && String(this._thread.chat) === String(chatId) ? { message_thread_id: this._thread.id } : {};
+    const body = { chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true, ...thread, ...(markup ? { reply_markup: markup } : {}), ...extra };
     let r = await tg(this.env, 'sendMessage', body);
     const nid = r && !r.ok && r.parameters && r.parameters.migrate_to_chat_id;
     if (nid) { await this.migrateChat(chatId, nid); r = await tg(this.env, 'sendMessage', { ...body, chat_id: nid }); }
@@ -404,7 +407,7 @@ export class Store {
     await tg(this.env, 'setMyCommands', { commands: COMMANDS, scope: { type: 'all_private_chats' } });
     for (const id of Object.keys(acl.chats)) if (id.startsWith('-')) await tg(this.env, 'setMyCommands', { commands: COMMANDS, scope: { type: 'chat', chat_id: Number(id) } });
     for (const id of Object.keys(acl.mirrors || {})) await tg(this.env, 'deleteMyCommands', { scope: { type: 'chat', chat_id: Number(id) } });
-    acl.cmdv = 6; await this.saveAcl(acl);
+    acl.cmdv = 7; await this.saveAcl(acl);
   }
   // Pulsante fisso in basso (tastiera del bot). Senza "/" funziona solo se la privacy del bot nei gruppi è disattivata.
   async setBottomKb(acl, mc, force) {
@@ -477,7 +480,7 @@ export class Store {
   async tick(nowTs) {
     const n = romeParts(nowTs);
     const acl = await this.acl();
-    if (acl.admin && acl.cmdv !== 6) await this.syncCommands(acl);
+    if (acl.admin && acl.cmdv !== 7) await this.syncCommands(acl);
     if ((acl.wakes || []).some(w => w.at <= nowTs)) {
       for (const w of acl.wakes.filter(w => w.at <= nowTs)) {
         const txt = `🟢 <b>Lo studio è aperto</b> (fino alle ${w.until}).\nEcco la richiesta ricette preparata${w.who ? ' da ' + esc(w.who) : ''}:\n\n${w.names.map(n => '• ' + esc(n)).join('\n')}\n\n👉 Tocca il pulsante qui sotto per inviarla${w.to ? ' a ' + esc(w.to) : ''} su WhatsApp.`;
@@ -556,6 +559,8 @@ export class Store {
   // Pulizia nei gruppi principali: le domande e risposte di un'operazione spariscono quando l'operazione finisce.
   async onUpdate(up) {
     this._sentLog = [];
+    const m0 = up.message || (up.callback_query && up.callback_query.message);
+    this._thread = m0 && m0.is_topic_message && m0.message_thread_id ? { chat: String(m0.chat.id), id: m0.message_thread_id } : null;
     const res = await this.onUpdateInner(up);
     try { await this.tidyFlow(up); } catch (e) { console.log('tidy', e && e.stack || e); }
     return res;
@@ -720,6 +725,10 @@ export class Store {
           return this.screen(chatId, 'scorte', this.stockView(c) + '\n\nTocca un farmaco per aggiungere una confezione.', { inline_keyboard: rows });
         }
         case '/storico': return this.screen(chatId, 'storico', this.historyView(c));
+        case '/analisi': {
+          if (this._thread) { const a2 = await this.acl(); a2.labThread = a2.labThread || {}; a2.labThread[chatId] = this._thread.id; await this.saveAcl(a2); }
+          return this.showLabs(chatId, c);
+        }
         case '/pulisci': {
           if (priv) return this.send(chatId, 'Questo comando si usa nei gruppi.');
           const pr = await this.purge(chatId, msg.message_id, c);
@@ -880,6 +889,15 @@ export class Store {
         return this.send(chatId, '✅ Cambio programmato.\n\n' + v.text, v.kb);
       }
       case 'occ_name': return this.occName(chatId, c, uid, fl, text, mid);
+      case 'lab_add': {
+        c.labs = c.labs || { routine: [], occ: [] };
+        const today = romeParts().date;
+        const names = text.split(/[,;\n]+/).map(x => x.trim()).filter(Boolean).slice(0, 30);
+        const list = d.kind === 'r' ? c.labs.routine : c.labs.occ;
+        for (const nm of names) if (!list.some(x => x.name.toLowerCase() === nm.toLowerCase())) list.push({ id: rid(), name: nm.slice(0, 60), added: today });
+        delete c.flows[uid]; await save();
+        return this.showLabs(chatId, c, d.mid);
+      }
       case 'pinfo_name': case 'pinfo_birth': case 'pinfo_cf': {
         const p = c.persons.find(x => x.id === d.pid);
         if (!p) { delete c.flows[uid]; await save(); return this.send(chatId, 'Persona non trovata.'); }
@@ -1064,6 +1082,30 @@ export class Store {
       t += '\n';
     }
     return t;
+  }
+  // 🩸 Analisi: elenco di routine e occasionali (nel topic del gruppo principale)
+  labsView(c, mode) {
+    const L = c.labs = c.labs || { routine: [], occ: [] };
+    let t = '🩸 <b>Analisi</b>\n';
+    t += '\n<b>Di routine</b>' + (L.routine.length ? L.routine.map(x => `\n• ${esc(x.name)}`).join('') : '\n<i>nessuna</i>');
+    t += '\n\n<b>Occasionali</b>' + (L.occ.length ? L.occ.map(x => `\n• ${esc(x.name)} <i>(dal ${fmtDate(x.added)})</i>`).join('') : '\n<i>nessuna</i>');
+    const kb = [];
+    if (mode === 'del') {
+      t += '\n\nTocca un\'analisi per toglierla:';
+      for (const x of L.routine) kb.push([{ text: `🗑 ${x.name}`.slice(0, 60), callback_data: 'LD|' + x.id }]);
+      for (const x of L.occ) kb.push([{ text: `🗑 ${x.name}`.slice(0, 60), callback_data: 'LD|' + x.id }]);
+      kb.push([{ text: '⬅️ Fine', callback_data: 'LB' }]);
+    } else {
+      for (const x of L.occ) kb.push([{ text: `✅ Fatta: ${x.name}`.slice(0, 60), callback_data: 'LD|' + x.id }]);
+      kb.push([{ text: '➕ Routine', callback_data: 'LA|r' }, { text: '➕ Occasionale', callback_data: 'LA|o' }]);
+      if (L.routine.length || L.occ.length) kb.push([{ text: '🗑 Togli', callback_data: 'LX' }]);
+    }
+    return { text: t, kb: { inline_keyboard: kb } };
+  }
+  async showLabs(chatId, c, mid) {
+    const v = this.labsView(c);
+    if (mid) { const r = await this.edit(chatId, mid, v.text, v.kb); if (r.ok || /not modified/i.test(r.description || '')) return; }
+    return this.screen(chatId, 'analisi', v.text, v.kb);
   }
   todayView(c, panel) {
     const n = romeParts();
@@ -1440,6 +1482,23 @@ export class Store {
       const v = this.reqView(c, uid, who); const r1 = await this.screen(chatId, 'ricette', v.text, v.kb);
       if (r1.ok) c.flows[uid].req.mid = r1.result.message_id;
       await this.saveChat(dataId, c);
+      return ans();
+    }
+    if (['LB', 'LX', 'LA', 'LD'].includes(k)) {
+      c.labs = c.labs || { routine: [], occ: [] };
+      if (k === 'LB') { const v = this.labsView(c); await this.edit(chatId, mid, v.text, v.kb); return ans(); }
+      if (k === 'LX') { const v = this.labsView(c, 'del'); await this.edit(chatId, mid, v.text, v.kb); return ans(); }
+      if (k === 'LD') {
+        const was = [...c.labs.routine, ...c.labs.occ].find(x => x.id === r[0]);
+        const inDel = (q.message.reply_markup ? JSON.stringify(q.message.reply_markup) : '').includes('"LB"');
+        c.labs.routine = c.labs.routine.filter(x => x.id !== r[0]); c.labs.occ = c.labs.occ.filter(x => x.id !== r[0]);
+        await this.saveChat(dataId, c);
+        const v = this.labsView(c, inDel && (c.labs.routine.length || c.labs.occ.length) ? 'del' : undefined); await this.edit(chatId, mid, v.text, v.kb);
+        return ans(was ? `Tolta: ${was.name}` : '');
+      }
+      // LA: aggiunta
+      c.flows[uid] = { step: 'lab_add', d: { kind: r[0], mid } }; await this.saveChat(dataId, c);
+      await this.ask(chatId, r[0] === 'r' ? 'Quali analisi di <b>routine</b>? Puoi scriverne più di una separate da virgola, ad esempio:\n<code>Emocromo, Creatinina, Potassio, INR</code>' : 'Quale analisi <b>occasionale</b>? Ad esempio <code>Urinocoltura</code>', null, 'Es. Emocromo, Creatinina');
       return ans();
     }
     if (k === 'RW' || k === 'RWo') {
