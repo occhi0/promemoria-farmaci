@@ -58,6 +58,26 @@ function parseDays(s) {
   }
   return out.size ? [...out].sort() : null;
 }
+// Orari dello studio del medico (0 = domenica). Festività e ferie non sono comprese.
+const STUDIO = {
+  0: [], 1: [['16:30', '19:00']], 2: [['08:30', '10:30'], ['16:30', '18:30']], 3: [['08:30', '11:30']],
+  4: [['16:30', '19:00']], 5: [['08:30', '11:30']], 6: []
+};
+const DOW_FULL = ['domenica', 'lunedì', 'martedì', 'mercoledì', 'giovedì', 'venerdì', 'sabato'];
+const hmShort = t => t.replace(/^0/, '');
+function studioLine(ts = Date.now()) {
+  const n = romeParts(ts);
+  for (const [a, b] of STUDIO[n.dow]) if (n.min >= toMin(a) && n.min < toMin(b)) return `🟢 Studio aperto ora, fino alle ${hmShort(b)}`;
+  for (let i = 0; i < 8; i++) {
+    const d = addDays(n.date, i);
+    for (const [a] of STUDIO[d.dow]) {
+      if (i === 0 && toMin(a) <= n.min) continue;
+      const when = i === 0 ? 'oggi' : i === 1 ? 'domani' : DOW_FULL[d.dow];
+      return `🔴 Studio chiuso, riapre ${when} alle ${hmShort(a)}`;
+    }
+  }
+  return '🔴 Studio chiuso';
+}
 const MONTHS = { gen: 1, feb: 2, mar: 3, apr: 4, mag: 5, giu: 6, lug: 7, ago: 8, set: 9, ott: 10, nov: 11, dic: 12 };
 // Capisce: oggi, domani, "tra 5 giorni", "9/11", "9/11/2026", "9 novembre"
 function parseDate(text, today) {
@@ -461,7 +481,11 @@ export class Store {
       if (!Object.keys(c.sent[n.date]).length) delete c.sent[n.date];
       if (changed) await this.saveChat(chatId, c);
       // pannelli dei gruppi semplici: aggiornati se è successo qualcosa o se è cambiato il giorno
-      for (const mc of targets.slice(1)) { const P = (acl.panels || {})[mc] || {}; if (changed || P.day !== n.date || !P.oggi) { await this.updatePanel(acl, mc, c); await this.updateOrders(acl, mc, c); } }
+      for (const mc of targets.slice(1)) {
+        const P = (acl.panels || {})[mc] || {};
+        if (changed || P.day !== n.date || !P.oggi) { await this.updatePanel(acl, mc, c); await this.updateOrders(acl, mc, c); }
+        else if (P.orders && P.studio !== studioLine(nowTs)) await this.updateOrders(acl, mc, c);   // lo studio ha aperto/chiuso
+      }
     }
   }
 
@@ -998,7 +1022,9 @@ export class Store {
       { text: `1 conf. (+${m.pack})`, callback_data: `SA|${m.id}|1` }
     ]);
     const noPack = low.filter(m => !m.pack);
-    t += `\n\n👉 Tocca <b>Invia richiesta</b> per mandare la richiesta delle ricette su WhatsApp.`;
+    const sl = studioLine();
+    t += `\n\n${sl}`;
+    t += `\n👉 Tocca <b>Invia richiesta</b> per mandare la richiesta delle ricette su WhatsApp.`;
     if (low.some(m => m.pack)) t += `\n👉 Quando un farmaco è stato ritirato in farmacia, tocca il suo pulsante <b>☑️</b> qui sotto (2 confezioni, oppure "1 conf."): la scorta si aggiorna e il farmaco esce dalla lista.`;
     if (noPack.length) t += `\n\n<i>Per avere il pulsante ☑️ anche per ${noPack.map(m => esc(m.name)).join(', ')}, nel gruppo principale imposta le compresse per confezione (/scorte → farmaco → ⚙️).</i>`;
     if (missing) t += `\n\n<i>Mancano i dati dell'assistita: impostali nel gruppo principale da /scorte → Richiedi ricette.</i>`;
@@ -1006,11 +1032,11 @@ export class Store {
     const isNew = P.orderKeys !== undefined && low.some(m => !P.orderKeys.split(',').includes(m.id));
     if (P.orders && !isNew) {
       const r = await this.edit(mc, P.orders, t, markup);
-      if (r.ok || /not modified/i.test(r.description || '')) { if (P.orderKeys !== keys) { P.orderKeys = keys; await this.saveAcl(acl); } return; }
+      if (r.ok || /not modified/i.test(r.description || '')) { if (P.orderKeys !== keys || P.studio !== sl) { P.orderKeys = keys; P.studio = sl; await this.saveAcl(acl); } return; }
     }
     if (P.orders) await this.del(mc, P.orders);   // farmaco nuovo in lista: lo rimandiamo, così suona la notifica
     const r = await this.send(mc, t, markup);
-    if (r.ok) { P.orders = r.result.message_id; P.orderKeys = keys; await this.saveAcl(acl); }
+    if (r.ok) { P.orders = r.result.message_id; P.orderKeys = keys; P.studio = sl; await this.saveAcl(acl); }
   }
   reqView(c, uid, who) {
     const fl = c.flows[uid]; const rq = fl && fl.req;
@@ -1025,7 +1051,7 @@ export class Store {
     const info = p.info || {};
     const chosen = uniq.filter(m => rq.sel.includes(m.id));
     const wa = this.waRequest(p, chosen, who);
-    const text = `📤 <b>Richiesta ricette</b> — ${esc(info.full || p.name)}${info.to ? '\nDestinatario: ' + esc(info.to) : ''}${info.birth ? '\nData di nascita: ' + esc(info.birth) : ''}${info.cf ? '\nC.F. ' + esc(info.cf) : ''}\n\nTocca i farmaci per sceglierli (✅ = da richiedere). Sono già selezionati quelli con ${YELLOW_DAYS} giorni o meno.`;
+    const text = `${studioLine()}\n\n📤 <b>Richiesta ricette</b> — ${esc(info.full || p.name)}${info.to ? '\nDestinatario: ' + esc(info.to) : ''}${info.birth ? '\nData di nascita: ' + esc(info.birth) : ''}${info.cf ? '\nC.F. ' + esc(info.cf) : ''}\n\nTocca i farmaci per sceglierli (✅ = da richiedere). Sono già selezionati quelli con ${YELLOW_DAYS} giorni o meno.`;
     const kb = uniq.map(m => { const d = left(m); return [{ text: `${rq.sel.includes(m.id) ? '✅' : '⬜'} ${shortName(m.name)}${m.dose ? ' ' + m.dose : ''}${d != null ? ` · ${d} gg` : ''}`.slice(0, 60), callback_data: 'RT|' + m.id }]; });
     if (chosen.length) kb.push([{ text: `📤 Invia su WhatsApp (${chosen.length})`, url: 'https://wa.me/?text=' + encodeURIComponent(wa) }]);
     kb.push([{ text: '✏️ Dati assistita', callback_data: 'RI|' + p.id }, { text: 'Chiudi', callback_data: 'RX' }]);
