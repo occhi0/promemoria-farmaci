@@ -615,11 +615,20 @@ export class Store {
     // 2) il resto in blocco
     const ids = [];
     for (let m = fromMid; m > fromMid - 1000 && m > 0; m--) if (!keep.has(m)) ids.push(m);
-    let bulkOk = 0, err = '';
-    for (let i = 0; i < ids.length; i += 100) {
-      const r = await tg(this.env, 'deleteMessages', { chat_id: chatId, message_ids: ids.slice(i, i + 100) });
-      if (r.ok) bulkOk++; else if (!err) err = r.description || 'errore sconosciuto';
-    }
+    // se un blocco contiene un messaggio non cancellabile (es. l'inizio di un topic) Telegram rifiuta tutto il blocco:
+    // lo dividiamo a metà finché non isoliamo quel messaggio (con un tetto di chiamate, per i limiti di Cloudflare)
+    let bulkOk = 0, err = '', budget = Math.max(10, 30 - Math.min(known.length, 35));   // Cloudflare gratuito: ~50 chiamate per volta
+    const bulk = async part => {
+      if (!part.length || budget <= 0) return;
+      budget--;
+      const r = await tg(this.env, 'deleteMessages', { chat_id: chatId, message_ids: part });
+      if (r.ok) { bulkOk++; return; }
+      if (!err) err = r.description || 'errore sconosciuto';
+      if (part.length === 1) return;
+      const h = Math.ceil(part.length / 2);
+      await bulk(part.slice(0, h)); await bulk(part.slice(h));
+    };
+    for (let i = 0; i < ids.length; i += 100) await bulk(ids.slice(i, i + 100));
     return { single, bulkOk, err };
   }
   schedDel(acl, chat, mid, minutes) { acl.temp = acl.temp || []; if (!acl.temp.some(t => t.chat === String(chat) && t.mid === mid)) acl.temp.push({ chat: String(chat), mid, at: Date.now() + minutes * 60e3 }); }
@@ -701,7 +710,7 @@ export class Store {
         if (P.terapia) { await this.del(chatId, P.terapia); delete P.terapia; }
         acl.temp = (acl.temp || []).filter(t => t.chat !== chatId); await this.saveAcl(acl);
         await this.updatePanel(acl, chatId, sc, true); await this.updateOrders(acl, chatId, sc); await this.refreshLabs(acl, src, sc);
-        if (!pr.bulkOk && pr.err) return this.sendTemp(acl, chatId, '⚠️ Non sono riuscito a cancellare i messaggi: ' + esc(pr.err), 3);
+        if (!pr.bulkOk && !pr.single && pr.err) return this.sendTemp(acl, chatId, '⚠️ Non sono riuscito a cancellare i messaggi: ' + esc(pr.err), 3);
         return;
       }
       if (cmd === '/scollega' && uid === acl.admin) {
