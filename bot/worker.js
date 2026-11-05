@@ -501,7 +501,7 @@ export class Store {
         if (rk.ok) await this.del(chatId, rk.result.message_id);
         await tg(this.env, 'deleteMyCommands', { scope: { type: 'chat', chat_id: Number(chatId) } });
       }
-      if (cmd === '/oggi') return this.updatePanel(acl, chatId, await this.chat(src), true);
+      if (cmd === '/oggi') { const sc = await this.chat(src); await this.updatePanel(acl, chatId, sc, true); return this.updateOrders(acl, chatId, sc); }
       if (cmd === '/terapia') return this.mirrorTherapy(acl, chatId, await this.chat(src), acl.chats[src], true);
       if (cmd === '/scollega' && uid === acl.admin) {
         delete acl.mirrors[chatId]; await this.saveAcl(acl);
@@ -1150,7 +1150,7 @@ export class Store {
     if (k === 'TP' && isMirror) { await this.mirrorTherapy(acl, realId, c, acl.chats[dataId], true); return ans('Terapia qui sotto 👇'); }
     if (k === 'OR' && isMirror) {
       if (realId !== chatId) await this.del(chatId, mid);   // pannello vecchio: lo togliamo
-      await this.updatePanel(acl, realId, c, true); return ans('Aggiornato');
+      await this.updatePanel(acl, realId, c, true); await this.updateOrders(acl, realId, c); return ans('Aggiornato');
     }
     if (k === 'RQ' || k === 'RP' || k === 'RI') {
       const pids = [...new Set(c.meds.filter(m => !this.ended(m, today)).map(m => m.person))];
