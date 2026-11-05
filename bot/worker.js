@@ -79,13 +79,13 @@ function studioLine(ts = Date.now()) {
   }
   return '🔴 Studio chiuso';
 }
-function studioTable() {
+function studioTable(ct) {
   const fmt = sl => sl ? `${hmShort(sl[0])}–${hmShort(sl[1])}` : '—';
   const row = (lbl, d) => {
     const am = STUDIO[d].find(x => toMin(x[0]) < 13 * 60), pm = STUDIO[d].find(x => toMin(x[0]) >= 13 * 60);
     return `${lbl.padEnd(4)}${fmt(am).padEnd(12)}${fmt(pm)}`;
   };
-  return `🕐 <b>Orari dello studio medico</b>\n${studioLine()}\n\n<pre>    Mattina     Pomeriggio\n${[['Lun', 1], ['Mar', 2], ['Mer', 3], ['Gio', 4], ['Ven', 5]].map(([l, d]) => row(l, d)).join('\n')}\nSab e Dom: chiuso</pre>\n<i>Questo messaggio si cancella da solo tra 5 minuti.</i>`;
+  return `🕐 <b>Orari dello studio medico</b>\n${studioLine()}\n\n<pre>    Mattina     Pomeriggio\n${[['Lun', 1], ['Mar', 2], ['Mer', 3], ['Gio', 4], ['Ven', 5]].map(([l, d]) => row(l, d)).join('\n')}\nSab e Dom: chiuso</pre>${ct ? `\n📞 ${ct.to ? esc(ct.to) + ': ' : ''}${esc(ct.tel)}` : ''}\n<i>Questo messaggio si cancella da solo tra 5 minuti.</i>`;
 }
 const MONTHS = { gen: 1, feb: 2, mar: 3, apr: 4, mag: 5, giu: 6, lug: 7, ago: 8, set: 9, ott: 10, nov: 11, dic: 12 };
 // Capisce: oggi, domani, "tra 5 giorni", "9/11", "9/11/2026", "9 novembre"
@@ -543,7 +543,7 @@ export class Store {
     acl.mirrors = acl.mirrors || {};
     if (acl.mirrors[chatId]) {
       const src = acl.mirrors[chatId];
-      if (!cmd && text === ORARI_BTN) { await this.del(chatId, msg.message_id); return this.sendTemp(acl, chatId, studioTable(), 5); }
+      if (!cmd && text === ORARI_BTN) { await this.del(chatId, msg.message_id); return this.sendTemp(acl, chatId, studioTable(this.contact(await this.chat(acl.mirrors[chatId]))), 5); }
       if (cmd) await this.del(chatId, msg.message_id);   // pagina pulita: via i comandi scritti
       if (cmd) await this.setBottomKb(acl, chatId);
       if ((cmd === '/oggi' || cmd === '/terapia') && ((acl.mcv || {})[chatId] || 0) < 4) {
@@ -554,7 +554,7 @@ export class Store {
       }
       if (cmd === '/oggi') { const sc = await this.chat(src); await this.updatePanel(acl, chatId, sc, true); return this.updateOrders(acl, chatId, sc); }
       if (cmd === '/terapia') return this.mirrorTherapy(acl, chatId, await this.chat(src), acl.chats[src], true);
-      if (cmd === '/orari') return this.sendTemp(acl, chatId, studioTable(), 5);
+      if (cmd === '/orari') return this.sendTemp(acl, chatId, studioTable(this.contact(await this.chat(src))), 5);
       if (cmd === '/scollega' && uid === acl.admin) {
         delete acl.mirrors[chatId]; await this.saveAcl(acl);
         await tg(this.env, 'deleteMyCommands', { scope: { type: 'chat', chat_id: Number(chatId) } });
@@ -776,6 +776,16 @@ export class Store {
         if (!p) { delete c.flows[uid]; await save(); return this.send(chatId, 'Persona non trovata.'); }
         p.info = p.info || {};
         p.info.to = isSkip(text) ? '' : text.slice(0, 40);
+        fl.step = 'pinfo_tel'; await save();
+        return this.askTel(chatId, mid, p.info.to);
+      }
+      case 'pinfo_tel': {
+        const p = c.persons.find(x => x.id === d.pid);
+        if (!p) { delete c.flows[uid]; await save(); return this.send(chatId, 'Persona non trovata.'); }
+        p.info = p.info || {};
+        if (isSkip(text)) p.info.tel = '';
+        else { const t = text.replace(/[^\d+ ]/g, '').trim(); if (t.replace(/\D/g, '').length < 6) return this.ask(chatId, 'Scrivi il numero di telefono, ad esempio <code>+39 333 123 4567</code>, oppure <b>-</b> per saltare.', mid, 'Telefono'); p.info.tel = t; }
+        await this.refreshPanels(await this.acl(), chatId, c);
         this.startReq(c, uid, p.id); await save();
         const v = this.reqView(c, uid, d.who);
         return this.send(chatId, '✅ Dati salvati.\n\n' + v.text, v.kb);
@@ -1014,6 +1024,10 @@ export class Store {
     return wa + '\n\n' + meds.map(m => `• ${m.name}${m.dose ? ' ' + m.dose : ''}`).join('\n') + `\n\nGrazie${who ? ',\n' + who : ''}`;
   }
   // Farmaci con scorte per 7 giorni o meno (uno per nome+dosaggio), dal più urgente
+  contact(c) {   // telefono della segreteria, dai dati dell'assistita
+    const p = c.persons.find(x => x.info && x.info.tel);
+    return p ? { tel: p.info.tel, to: p.info.to || '' } : null;
+  }
   lowMeds(c) {
     const today = romeParts().date;
     const left = m => m.stock / this.perDay(m);
@@ -1050,7 +1064,8 @@ export class Store {
     ]);
     const noPack = low.filter(m => !m.pack);
     const sl = studioLine();
-    t += `\n\n${sl}`;
+    const ct = this.contact(c);
+    t += `\n\n${sl}${ct ? `\n📞 ${ct.to ? esc(ct.to) + ': ' : ''}${esc(ct.tel)}` : ''}`;
     t += `\n👉 Tocca <b>Invia richiesta</b> per mandare la richiesta delle ricette su WhatsApp.`;
     if (low.some(m => m.pack)) t += `\n👉 Quando un farmaco è stato ritirato in farmacia, tocca il suo pulsante <b>☑️</b> qui sotto (2 confezioni, oppure "1 conf."): la scorta si aggiorna e il farmaco esce dalla lista.`;
     if (noPack.length) t += `\n\n<i>Per avere il pulsante ☑️ anche per ${noPack.map(m => esc(m.name)).join(', ')}, nel gruppo principale imposta le compresse per confezione (/scorte → farmaco → ⚙️).</i>`;
@@ -1078,11 +1093,14 @@ export class Store {
     const info = p.info || {};
     const chosen = uniq.filter(m => rq.sel.includes(m.id));
     const wa = this.waRequest(p, chosen, who);
-    const text = `${studioLine()}\n\n📤 <b>Richiesta ricette</b> — ${esc(info.full || p.name)}${info.to ? '\nDestinatario: ' + esc(info.to) : ''}${info.birth ? '\nData di nascita: ' + esc(info.birth) : ''}${info.cf ? '\nC.F. ' + esc(info.cf) : ''}\n\nTocca i farmaci per sceglierli (✅ = da richiedere). Sono già selezionati quelli con ${YELLOW_DAYS} giorni o meno.`;
+    const text = `${studioLine()}\n\n📤 <b>Richiesta ricette</b> — ${esc(info.full || p.name)}${info.to ? '\nDestinatario: ' + esc(info.to) : ''}${info.tel ? ' · 📞 ' + esc(info.tel) : ''}${info.birth ? '\nData di nascita: ' + esc(info.birth) : ''}${info.cf ? '\nC.F. ' + esc(info.cf) : ''}\n\nTocca i farmaci per sceglierli (✅ = da richiedere). Sono già selezionati quelli con ${YELLOW_DAYS} giorni o meno.`;
     const kb = uniq.map(m => { const d = left(m); return [{ text: `${rq.sel.includes(m.id) ? '✅' : '⬜'} ${shortName(m.name)}${m.dose ? ' ' + m.dose : ''}${d != null ? ` · ${d} gg` : ''}`.slice(0, 60), callback_data: 'RT|' + m.id }]; });
     if (chosen.length) kb.push([{ text: `📤 Invia su WhatsApp (${chosen.length})`, url: 'https://wa.me/?text=' + encodeURIComponent(wa) }]);
     kb.push([{ text: '✏️ Dati assistita', callback_data: 'RI|' + p.id }, { text: 'Chiudi', callback_data: 'RX' }]);
     return { text, kb: { inline_keyboard: kb } };
+  }
+  askTel(chatId, mid, to) {
+    return this.ask(chatId, `Numero di telefono ${to ? 'di <b>' + esc(to) + '</b>' : 'della segreteria'}? Lo mostro nella tabella degli orari e nel messaggio "Da ordinare", toccabile per chiamare.\nScrivi <b>-</b> per saltare.`, mid, 'Es. +39 333 123 4567');
   }
   askTo(chatId, mid) {
     return this.ask(chatId, 'A chi mandi la richiesta? Scrivi il nome per il saluto (es. <code>Vincenzo</code>), così il messaggio inizia con "Buongiorno Vincenzo".\nScrivi <b>-</b> per un semplice "Buongiorno".', mid, 'Es. Vincenzo');
@@ -1209,7 +1227,7 @@ export class Store {
       if (low) await this.send(dataId, low.text, low.kb);
       return ans(answer);
     }
-    if (k === 'OS' && isMirror) { await this.sendTemp(acl, realId, studioTable(), 5); return ans('Orari qui sotto 👇'); }
+    if (k === 'OS' && isMirror) { await this.sendTemp(acl, realId, studioTable(this.contact(c)), 5); return ans('Orari qui sotto 👇'); }
     if (k === 'TP' && isMirror) { await this.setBottomKb(acl, realId); await this.mirrorTherapy(acl, realId, c, acl.chats[dataId], true); return ans('Terapia qui sotto 👇'); }
     if (k === 'OR' && isMirror) {
       if (realId !== chatId) await this.del(chatId, mid);   // pannello vecchio: lo togliamo
@@ -1228,6 +1246,11 @@ export class Store {
       }
       const p = c.persons.find(x => x.id === pid);
       if (!p) return ans();
+      if (k !== 'RI' && p.info && p.info.full && p.info.to !== undefined && p.info.tel === undefined) {
+        c.flows[uid] = { step: 'pinfo_tel', d: { pid: p.id, who } }; await this.saveChat(dataId, c);
+        await this.askTel(chatId, null, p.info.to);
+        return ans();
+      }
       if (k !== 'RI' && p.info && p.info.full && p.info.to === undefined) {
         c.flows[uid] = { step: 'pinfo_to', d: { pid: p.id, who } }; await this.saveChat(dataId, c);
         await this.askTo(chatId, null);
