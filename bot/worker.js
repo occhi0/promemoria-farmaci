@@ -182,6 +182,7 @@ All'orario di ogni dose ti mando un messaggio con i pulsanti ✅ Preso, ⏰ ${SN
 /farmaci – elenco, modifica, pausa, scorte, elimina
 /scorte – compresse rimaste
 /storico – terapie a tempo, in corso e concluse
+/saltate – dosi saltate negli ultimi 90 giorni, con il motivo
 /analisi – elenco delle analisi (meglio nel topic 🩸 Analisi)
 /terapia – elenco della terapia da mostrare al medico
 /esporta – copia di sicurezza completa
@@ -199,6 +200,7 @@ const COMMANDS = [
   { command: 'terapia', description: 'Elenco della terapia per il medico' },
   { command: 'esporta', description: 'Copia di sicurezza completa' },
   { command: 'trasferisci', description: 'Sposta farmaci nel gruppo' },
+  { command: 'saltate', description: 'Dosi saltate e motivo' },
   { command: 'analisi', description: 'Elenco delle analisi del sangue' },
   { command: 'pulisci', description: 'Cancella i messaggi vecchi del gruppo' },
   { command: 'annulla', description: "Interrompi l'operazione in corso" },
@@ -414,7 +416,7 @@ export class Store {
     await tg(this.env, 'setMyCommands', { commands: COMMANDS, scope: { type: 'all_private_chats' } });
     for (const id of Object.keys(acl.chats)) if (id.startsWith('-')) await tg(this.env, 'setMyCommands', { commands: COMMANDS, scope: { type: 'chat', chat_id: Number(id) } });
     for (const id of Object.keys(acl.mirrors || {})) await tg(this.env, 'deleteMyCommands', { scope: { type: 'chat', chat_id: Number(id) } });
-    acl.cmdv = 7; await this.saveAcl(acl);
+    acl.cmdv = 8; await this.saveAcl(acl);
   }
   // Pulsante fisso in basso (tastiera del bot). Senza "/" funziona solo se la privacy del bot nei gruppi è disattivata.
   async setBottomKb(acl, mc, force) {
@@ -487,7 +489,7 @@ export class Store {
   async tick(nowTs) {
     const n = romeParts(nowTs);
     const acl = await this.acl();
-    if (acl.admin && acl.cmdv !== 7) await this.syncCommands(acl);
+    if (acl.admin && acl.cmdv !== 8) await this.syncCommands(acl);
     if ((acl.wakes || []).some(w => w.at <= nowTs)) {
       for (const w of acl.wakes.filter(w => w.at <= nowTs)) {
         const txt = `🟢 <b>Lo studio è aperto</b> (fino alle ${w.until}).\nEcco la richiesta ${w.kind === 'lab' ? 'analisi' : 'ricette'} preparata${w.who ? ' da ' + esc(w.who) : ''}:\n\n${w.names.map(n => '• ' + esc(n)).join('\n')}\n\n👉 Tocca il pulsante qui sotto per inviarla${w.to ? ' a ' + esc(w.to) : ''} su WhatsApp.`;
@@ -678,6 +680,7 @@ export class Store {
       if (!cmd && text) {
         const sc0 = await this.chat(src); const fl0 = sc0.flows[uid];
         if (fl0 && fl0.step === 'occ_name') return this.occName(src, sc0, uid, fl0, text, msg.message_id);
+        if (fl0 && fl0.step === 'skip_reason') return this.skipReason(src, sc0, uid, fl0, text, msg.message_id, chatId);
       }
       if (!cmd && text === ORARI_BTN) { await this.del(chatId, msg.message_id); return this.sendTemp(acl, chatId, studioTable(this.contact(await this.chat(acl.mirrors[chatId]))), 5); }
       if (cmd) await this.del(chatId, msg.message_id);   // pagina pulita: via i comandi scritti
@@ -767,6 +770,7 @@ export class Store {
           return this.screen(chatId, 'scorte', this.stockView(c) + '\n\nTocca un farmaco per aggiungere una confezione.', { inline_keyboard: rows });
         }
         case '/storico': return this.screen(chatId, 'storico', this.historyView(c));
+        case '/saltate': return this.screen(chatId, 'saltate', this.skippedView(c));
         case '/analisi': {
           if (this._thread) { const a2 = await this.acl(); a2.labThread = a2.labThread || {}; a2.labThread[chatId] = this._thread.id; await this.saveAcl(a2); }
           return this.showLabs(chatId, c);
@@ -932,6 +936,7 @@ export class Store {
         return this.send(chatId, '✅ Cambio programmato.\n\n' + v.text, v.kb);
       }
       case 'occ_name': return this.occName(chatId, c, uid, fl, text, mid);
+      case 'skip_reason': return this.skipReason(chatId, c, uid, fl, text, mid, chatId);
       case 'lab_add': {
         c.labs = c.labs || { routine: [], occ: [] };
         const today = romeParts().date;
@@ -1191,6 +1196,27 @@ export class Store {
     const v = this.labsView(c);
     if (mid) { const r = await this.edit(chatId, mid, v.text, v.kb); if (r.ok || /not modified/i.test(r.description || '')) return; }
     return this.screen(chatId, 'analisi', v.text, v.kb);
+  }
+  // motivo di una dose saltata (scritto a mano)
+  async skipReason(dataId, c, uid, fl, text, mid, view) {
+    const d = fl.d, e = (c.log[d.date] || {})[d.key];
+    if (e && e.s === 'skipped') e.r = text.trim().slice(0, 80);
+    delete c.flows[uid]; await this.saveChat(dataId, c);
+    if (d.q) await this.del(d.view || view, d.q);
+    const a = await this.acl(); return this.sendTemp(a, d.view || view, `📝 Motivo segnato: <i>${esc(text.trim().slice(0, 80))}</i>`, 1);
+  }
+  skippedView(c) {
+    const rows = [];
+    for (const date of Object.keys(c.log).sort().reverse()) {
+      const day = [];
+      for (const [key, e] of Object.entries(c.log[date])) {
+        if (e.s !== 'skipped') continue;
+        const [medId, time] = key.split('@'); const m = c.meds.find(x => x.id === medId) || (c.archive || []).find(x => x.id === medId);
+        day.push([time, `• ${time} ${esc(m ? m.name + (m.dose ? ' ' + m.dose : '') : 'farmaco eliminato')}${e.r ? ' — <i>' + esc(e.r) + '</i>' : ''}${e.by ? ' · ' + esc(e.by) : ''}`]);
+      }
+      if (day.length) rows.push(`\n<b>${fmtDate(date)}</b>\n` + day.sort((a, b) => a[0] < b[0] ? -1 : 1).map(x => x[1]).join('\n'));
+    }
+    return '⏭ <b>Dosi saltate</b> (ultimi 90 giorni)\n' + (rows.length ? rows.join('\n') : '\n<i>Nessuna dose saltata.</i> 👍');
   }
   // invia/modifica dentro un topic preciso (es. Analisi del gruppo semplice)
   async inThread(chat, thread, fn) {
@@ -1513,7 +1539,7 @@ export class Store {
     const c = await this.chat(dataId);
     const [k, ...r] = data.split('|');
     const today = romeParts().date;
-    if (isMirror && !['T', 'S', 'Z', 'U', 'O', 'OR', 'TP', 'SA', 'OS', 'RQ', 'RT', 'RA', 'RS', 'RX', 'RW', 'RWo', 'LQ', 'LT', 'LW', 'LQX'].includes(k)) return ans();
+    if (isMirror && !['T', 'S', 'Z', 'U', 'O', 'OR', 'TP', 'SA', 'OS', 'RQ', 'RT', 'RA', 'RS', 'RX', 'RW', 'RWo', 'LQ', 'LT', 'LW', 'LQX', 'SR'].includes(k)) return ans();
 
     if (['T', 'S', 'Z', 'U', 'O'].includes(k)) {
       const [date, medId, time] = r;
@@ -1560,7 +1586,27 @@ export class Store {
       }
       await this.refreshPanels(acl, dataId, c);
       if (low) await this.send(dataId, low.text, low.kb);
+      if (k === 'S') {   // perché è stata saltata?
+        const view = isMirror ? realId : chatId, base = `SR|${date}|${medId}|${time}|`;
+        const R = [['😣 Rifiutato', 'r'], ['😴 Dormiva', 'd'], ['🤢 Nausea', 'n'], ['📦 Finito', 'f'], ['🩺 Medico', 'm'], ['✏️ Altro', 'o']];
+        const qk = { inline_keyboard: [R.slice(0, 3).map(([t, x]) => ({ text: t, callback_data: base + x })), R.slice(3).map(([t, x]) => ({ text: t, callback_data: base + x })), [{ text: 'Nessun motivo', callback_data: base + '-' }]] };
+        const qm = await this.send(view, `⏭ Perché è stata saltata <b>${esc(m.name)}</b> delle ${time}?`, qk);
+        if (qm.ok) this.schedDel(acl, view, qm.result.message_id, 30), await this.saveAcl(acl);
+      }
       return ans(answer);
+    }
+    if (k === 'SR') {
+      const [date, medId, time, x] = r, key = medId + '@' + time, view = isMirror ? realId : chatId;
+      const e = (c.log[date] || {})[key];
+      if (!e || e.s !== 'skipped') { await this.del(view, mid); return ans('La dose non risulta più saltata'); }
+      if (x === 'o') {
+        c.flows[uid] = { step: 'skip_reason', d: { date, key, q: mid, view } }; await this.saveChat(dataId, c);
+        await this.ask(view, 'Scrivi il motivo:', null, 'Es. aveva la febbre'); return ans();
+      }
+      const M = { r: 'rifiutato', d: 'dormiva', n: 'nausea/vomito', f: 'farmaco finito', m: 'indicazione del medico' };
+      if (M[x]) e.r = M[x]; else delete e.r;
+      await this.saveChat(dataId, c); await this.del(view, mid);
+      return ans(M[x] ? 'Motivo: ' + M[x] : 'Ok');
     }
     if (k === 'OS' && isMirror) { await this.sendTemp(acl, realId, studioTable(this.contact(c)), 5); return ans('Orari qui sotto 👇'); }
     if (k === 'TP' && isMirror) { await this.setBottomKb(acl, realId); await this.mirrorTherapy(acl, realId, c, acl.chats[dataId], true); return ans('Terapia qui sotto 👇'); }
