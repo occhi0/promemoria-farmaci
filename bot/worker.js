@@ -1141,12 +1141,32 @@ export class Store {
     }
     return t;
   }
+  // gruppo per funzione, dedotto dal nome dell'analisi
+  labGroup(name) {
+    const n = ' ' + name.toLowerCase() + ' ';
+    const G = [
+      ['🫘 Reni', /creatinin|\burea\b|azotemia|acido urico|\burat|uricemia|egfr|filtrato|clearance|microalbumin|esame urine|urinocoltura/],
+      ['🧂 Sali minerali', /\bsodio\b|potassio|\bclor|magnesio|calcio|fosforo|fosfat(?!asi)|paratorm|\bpth\b/],
+      ['❤️ Cuore', /\bbnp\b|probnp|troponin|\bcpk\b|\bck\b/],
+      ['🟤 Fegato', /\bast\b|\bgot\b|\balt\b|\bgpt\b|gamma|\bggt\b|bilirubin|fosfatasi alcalina|albumin(?!uria)|protidogramma|proteine totali/],
+      ['🩸 Sangue', /emocromo|ferritin|sideremia|transferrin|\binr\b|\bpt\b|\bptt\b|b12|folat|\bves\b|\bpcr\b/],
+      ['⚖️ Metabolismo', /glicemia|glucosio|glicata|colesterol|\bhdl\b|\bldl\b|triglicerid|\btsh\b|\bft3\b|\bft4\b|tiroid/],
+    ];
+    for (const [g, re] of G) if (re.test(n)) return g;
+    return /prelievo/.test(n) ? '' : '📋 Altre';
+  }
   // 🩸 Analisi: elenco di routine e occasionali (nel topic del gruppo principale)
   labsView(c, mode) {
     const L = c.labs = c.labs || { routine: [], occ: [] };
     let t = '🩸 <b>Analisi</b>\n';
     const cod = x => x.code ? ` — <code>${esc(x.code)}</code>` : '';
-    t += '\n<b>Di routine</b>' + (L.routine.length ? L.routine.map(x => `\n• ${esc(x.name)}${cod(x)}`).join('') : '\n<i>nessuna</i>');
+    t += '\n<b>Di routine</b>';
+    if (!L.routine.length) t += '\n<i>nessuna</i>';
+    else {
+      const order = ['🫘 Reni', '🧂 Sali minerali', '❤️ Cuore', '🟤 Fegato', '🩸 Sangue', '⚖️ Metabolismo', '📋 Altre', ''];
+      const by = {}; for (const x of L.routine) (by[this.labGroup(x.name)] = by[this.labGroup(x.name)] || []).push(x);
+      for (const g of order) if (by[g]) t += (g ? `\n<i>${g}</i>` : '\n<i>🩹 Prelievo</i>') + by[g].map(x => `\n• ${esc(x.name)}${cod(x)}`).join('');
+    }
     t += '\n\n<b>Occasionali</b>' + (L.occ.length ? L.occ.map(x => `\n• ${esc(x.name)}${cod(x)} <i>(dal ${fmtDate(x.added)})</i>`).join('') : '\n<i>nessuna</i>');
     const kb = [];
     if (mode === 'del') {
