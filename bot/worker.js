@@ -375,6 +375,13 @@ export class Store {
     for (const id of Object.keys(acl.mirrors || {})) await tg(this.env, 'deleteMyCommands', { scope: { type: 'chat', chat_id: Number(id) } });
     acl.cmdv = 5; await this.saveAcl(acl);
   }
+  // Pulsante fisso in basso (tastiera del bot). Inizia con "/" così arriva al bot anche con la privacy dei gruppi.
+  async setBottomKb(acl, mc) {
+    acl.mcv = acl.mcv || {};
+    if ((acl.mcv[mc] || 0) >= 6) return;
+    const r = await this.send(mc, '🕐 Pulsante degli orari dello studio attivato qui sotto.', { keyboard: [[{ text: '/orari 🕐 Orari studio' }]], resize_keyboard: true, is_persistent: true });
+    if (r.ok) { acl.mcv[r._chat || mc] = 6; acl.temp = acl.temp || []; acl.temp.push({ chat: r._chat || String(mc), mid: r.result.message_id, at: Date.now() + 60e3 }); await this.saveAcl(acl); }
+  }
   async sendTemp(acl, mc, text, minutes) {
     const r = await this.send(mc, text);
     if (r.ok) { acl.temp = acl.temp || []; acl.temp.push({ chat: r._chat || String(mc), mid: r.result.message_id, at: Date.now() + minutes * 60e3 }); await this.saveAcl(acl); }
@@ -536,6 +543,7 @@ export class Store {
     if (acl.mirrors[chatId]) {
       const src = acl.mirrors[chatId];
       if (cmd) await this.del(chatId, msg.message_id);   // pagina pulita: via i comandi scritti
+      if (cmd) await this.setBottomKb(acl, chatId);
       if ((cmd === '/oggi' || cmd === '/terapia') && ((acl.mcv || {})[chatId] || 0) < 4) {
         acl.mcv = acl.mcv || {}; acl.mcv[chatId] = 4; await this.saveAcl(acl);
         const rk = await this.send(chatId, '…', { remove_keyboard: true });   // toglie i vecchi pulsanti fissi
@@ -912,7 +920,7 @@ export class Store {
   }
   todayView(c, panel) {
     const n = romeParts();
-    const pkb = panel ? { inline_keyboard: [[{ text: '🔄 Aggiorna', callback_data: 'OR' }, { text: '🩺 Terapia', callback_data: 'TP' }, { text: '🕐 Orari', callback_data: 'OS' }]] } : undefined;
+    const pkb = panel ? { inline_keyboard: [[{ text: '🔄 Aggiorna', callback_data: 'OR' }, { text: '🩺 Terapia', callback_data: 'TP' }]] } : undefined;
     if (!c.meds.length) return { text: 'Non ci sono ancora farmaci. Usa /aggiungi per inserirne uno.', kb: pkb };
     const ds = this.dosesOn(c, n.date, n.dow);
     if (!ds.length) return { text: `📅 <b>Oggi, ${fmtDate(n.date)}</b>\nNessuna dose prevista.`, kb: pkb };
@@ -927,7 +935,7 @@ export class Store {
       return `${ic} ${d.time}  ${this.multi(c) ? '<b>' + esc(this.person(c, d.m.person)) + '</b> · ' : ''}${esc(d.m.name)}${d.m.dose ? ' ' + esc(d.m.dose) : ''}${panel && e && e.by ? ' · <i>' + esc(e.by) + '</i>' : ''}`;
     });
     const text = `📅 <b>Oggi, ${fmtDate(n.date)}</b>\n${taken} di ${ds.length} dosi prese\n\n${lines.join('\n')}${kb.length ? '\n\nTocca per segnare come prese:' : ''}`;
-    kb.push(panel ? [{ text: '🔄 Aggiorna', callback_data: 'OR' }, { text: '🩺 Terapia', callback_data: 'TP' }, { text: '🕐 Orari', callback_data: 'OS' }] : [{ text: '🔄 Aggiorna', callback_data: 'OR' }]);
+    kb.push(panel ? [{ text: '🔄 Aggiorna', callback_data: 'OR' }, { text: '🩺 Terapia', callback_data: 'TP' }] : [{ text: '🔄 Aggiorna', callback_data: 'OR' }]);
     return { text: panel ? text + `\n\n<i>Quando arriva un promemoria tocca ✅ Preso (⏰ per rimandare, ⏭ per saltare). Aggiornato alle ${n.hm}.</i>` : text, kb: { inline_keyboard: kb } };
   }
   medsView(c) {
@@ -1145,6 +1153,7 @@ export class Store {
       const sc = await this.chat(src);
       await this.mirrorTherapy(acl, chatId, sc, acl.chats[src]);
       await this.updatePanel(acl, chatId, sc, true);
+      await this.setBottomKb(acl, chatId);
       const st = await tg(this.env, 'getChatMember', { chat_id: chatId, user_id: Number(this.env.TELEGRAM_BOT_TOKEN.split(':')[0]) });
       const adm = st.ok && st.result && st.result.status === 'administrator' && st.result.can_delete_messages && st.result.can_pin_messages;
       if (!adm) await this.send(acl.admin, '⚠️ Per tenere pulito il gruppo semplice (cancellare i promemoria già segnati e fissare il pannello), nomina il bot <b>amministratore</b> del gruppo con i permessi <b>Elimina messaggi</b> e <b>Fissa messaggi</b>.');
@@ -1199,10 +1208,10 @@ export class Store {
       return ans(answer);
     }
     if (k === 'OS' && isMirror) { await this.sendTemp(acl, realId, studioTable(), 5); return ans('Orari qui sotto 👇'); }
-    if (k === 'TP' && isMirror) { await this.mirrorTherapy(acl, realId, c, acl.chats[dataId], true); return ans('Terapia qui sotto 👇'); }
+    if (k === 'TP' && isMirror) { await this.setBottomKb(acl, realId); await this.mirrorTherapy(acl, realId, c, acl.chats[dataId], true); return ans('Terapia qui sotto 👇'); }
     if (k === 'OR' && isMirror) {
       if (realId !== chatId) await this.del(chatId, mid);   // pannello vecchio: lo togliamo
-      await this.updatePanel(acl, realId, c, true); await this.updateOrders(acl, realId, c); return ans('Aggiornato');
+      await this.setBottomKb(acl, realId); await this.updatePanel(acl, realId, c, true); await this.updateOrders(acl, realId, c); return ans('Aggiornato');
     }
     if (k === 'RQ' || k === 'RP' || k === 'RI') {
       const pids = [...new Set(c.meds.filter(m => !this.ended(m, today)).map(m => m.person))];
