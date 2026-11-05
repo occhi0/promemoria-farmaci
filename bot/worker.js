@@ -79,6 +79,28 @@ function studioLine(ts = Date.now()) {
   }
   return '🔴 Studio chiuso';
 }
+function romeToTs(date, hm) {   // ora locale di Roma -> timestamp (gestisce ora legale/solare)
+  const [y, mo, d] = date.split('-').map(Number), [h, mi] = hm.split(':').map(Number);
+  let ts = Date.UTC(y, mo - 1, d, h, mi);
+  for (let i = 0; i < 2; i++) {
+    const p = romeParts(ts), [py, pm, pd] = p.date.split('-').map(Number);
+    const asUtc = Date.UTC(py, pm - 1, pd, Math.floor(p.min / 60), p.min % 60);
+    ts -= (asUtc - Date.UTC(y, mo - 1, d, h, mi));
+  }
+  return ts;
+}
+function studioOpen(ts = Date.now()) { const n = romeParts(ts); return STUDIO[n.dow].some(([a, b]) => n.min >= toMin(a) && n.min < toMin(b)); }
+function nextOpening(ts = Date.now()) {   // { ts, label: "martedì alle 8:30", until: "10:30" }
+  const n = romeParts(ts);
+  for (let i = 0; i < 8; i++) {
+    const d = addDays(n.date, i);
+    for (const [a, b] of STUDIO[d.dow]) {
+      if (i === 0 && toMin(a) <= n.min) continue;
+      return { ts: romeToTs(d.date, a), label: `${i === 0 ? 'oggi' : i === 1 ? 'domani' : DOW_FULL[d.dow]} alle ${hmShort(a)}`, until: hmShort(b) };
+    }
+  }
+  return null;
+}
 function studioTable(ct) {
   const fmt = sl => sl ? `${hmShort(sl[0])}–${hmShort(sl[1])}` : '—';
   const row = (lbl, d) => {
@@ -456,6 +478,15 @@ export class Store {
     const n = romeParts(nowTs);
     const acl = await this.acl();
     if (acl.admin && acl.cmdv !== 6) await this.syncCommands(acl);
+    if ((acl.wakes || []).some(w => w.at <= nowTs)) {
+      for (const w of acl.wakes.filter(w => w.at <= nowTs)) {
+        const txt = `🟢 <b>Lo studio è aperto</b> (fino alle ${w.until}).\nEcco la richiesta ricette preparata${w.who ? ' da ' + esc(w.who) : ''}:\n\n${w.names.map(n => '• ' + esc(n)).join('\n')}\n\n👉 Tocca il pulsante qui sotto per inviarla${w.to ? ' a ' + esc(w.to) : ''} su WhatsApp.`;
+        const kb = { inline_keyboard: [[{ text: `📤 Invia${w.to ? ' a ' + w.to : ''} su WhatsApp`.slice(0, 60), url: w.url }]] };
+        const r = await this.send(w.chat, txt, kb);
+        if (r.ok && w.mirror) { acl.temp = acl.temp || []; acl.temp.push({ chat: r._chat, mid: r.result.message_id, at: nowTs + 3 * 3600e3 }); }
+      }
+      acl.wakes = acl.wakes.filter(w => w.at > nowTs); await this.saveAcl(acl);
+    }
     if ((acl.temp || []).some(t => t.at <= nowTs)) {
       for (const t of acl.temp.filter(t => t.at <= nowTs)) await this.del(t.chat, t.mid);
       acl.temp = acl.temp.filter(t => t.at > nowTs); await this.saveAcl(acl);
@@ -1165,7 +1196,8 @@ export class Store {
       const info = p.info || {};
       if (!info.full) missing = true;
       const url = this.waUrl(p, this.waRequest(p, low.filter(m => m.person === pid)));
-      kb.push([{ text: `📤 Invia richiesta${info.to ? ' a ' + info.to : ''}${pids.length > 1 ? ' · ' + p.name : ''}`.slice(0, 60), url }]);
+      if (!studioOpen()) kb.push([{ text: '⏰ Ricordamelo all\'apertura', callback_data: 'RWo|' + pid }, { text: '📤 Invia comunque', url }]);
+      else kb.push([{ text: `📤 Invia richiesta${info.to ? ' a ' + info.to : ''}${pids.length > 1 ? ' · ' + p.name : ''}`.slice(0, 60), url }]);
     }
     for (const m of low) if (m.pack) kb.push([
       { text: `☑️ ${shortName(m.name)} · 2 conf. (+${m.pack * 2})`.slice(0, 60), callback_data: `SA|${m.id}|2` },
@@ -1174,7 +1206,7 @@ export class Store {
     const noPack = low.filter(m => !m.pack);
     const sl = studioLine();
     t += `\n\n${sl}`;
-    t += `\n👉 Tocca <b>Invia richiesta</b> per mandare la richiesta delle ricette su WhatsApp.`;
+    t += studioOpen() ? `\n👉 Tocca <b>Invia richiesta</b> per mandare la richiesta delle ricette su WhatsApp.` : `\n👉 Tocca <b>Ricordamelo all'apertura</b>: quando lo studio apre ti arriva la richiesta pronta da inviare (oppure <b>Invia comunque</b>).`;
     if (low.some(m => m.pack)) t += `\n👉 Quando un farmaco è stato ritirato in farmacia, tocca il suo pulsante <b>☑️</b> qui sotto (2 confezioni, oppure "1 conf."): la scorta si aggiorna e il farmaco esce dalla lista.`;
     if (noPack.length) t += `\n\n<i>Per avere il pulsante ☑️ anche per ${noPack.map(m => esc(m.name)).join(', ')}, nel gruppo principale imposta le compresse per confezione (/scorte → farmaco → ⚙️).</i>`;
     if (missing) t += `\n\n<i>Mancano i dati dell'assistita: impostali nel gruppo principale da /scorte → Richiedi ricette.</i>`;
@@ -1208,7 +1240,10 @@ export class Store {
     for (const o of occ) kb.push([{ text: `${rq.sel.includes(o.id) ? '✅' : '⬜'} ${shortName(o.name)} · al bisogno`.slice(0, 60), callback_data: 'RT|' + o.id }]);
     for (const x of extra) kb.push([{ text: `${rq.sel.includes(x.id) ? '✅' : '⬜'} ${shortName(x.name)} · solo ora`.slice(0, 60), callback_data: 'RT|' + x.id }]);
     kb.push([{ text: '➕ Altro farmaco', callback_data: 'RA' }]);
-    if (chosen.length) kb.push([{ text: `📤 Invia${info.to ? ' a ' + info.to : ''} su WhatsApp (${chosen.length})`.slice(0, 60), url: this.waUrl(p, wa) }]);
+    if (chosen.length) {
+      if (!studioOpen()) kb.push([{ text: '⏰ Ricordamelo all\'apertura', callback_data: 'RW' }, { text: '📤 Invia comunque', url: this.waUrl(p, wa) }]);
+      else kb.push([{ text: `📤 Invia${info.to ? ' a ' + info.to : ''} su WhatsApp (${chosen.length})`.slice(0, 60), url: this.waUrl(p, wa) }]);
+    }
     if (!mirror && !info.tel) kb.push([{ text: `📞 Numero di ${info.to || 'segreteria'} (per WhatsApp)`.slice(0, 60), callback_data: 'RN|' + p.id }]);
     kb.push(mirror ? [{ text: 'Chiudi', callback_data: 'RX' }] : [{ text: '✏️ Dati assistita', callback_data: 'RI|' + p.id }, { text: 'Chiudi', callback_data: 'RX' }]);
     return { text, kb: { inline_keyboard: kb } };
@@ -1310,7 +1345,7 @@ export class Store {
     const c = await this.chat(dataId);
     const [k, ...r] = data.split('|');
     const today = romeParts().date;
-    if (isMirror && !['T', 'S', 'Z', 'U', 'O', 'OR', 'TP', 'SA', 'OS', 'RQ', 'RT', 'RA', 'RS', 'RX'].includes(k)) return ans();
+    if (isMirror && !['T', 'S', 'Z', 'U', 'O', 'OR', 'TP', 'SA', 'OS', 'RQ', 'RT', 'RA', 'RS', 'RX', 'RW', 'RWo'].includes(k)) return ans();
 
     if (['T', 'S', 'Z', 'U', 'O'].includes(k)) {
       const [date, medId, time] = r;
@@ -1406,6 +1441,29 @@ export class Store {
       if (r1.ok) c.flows[uid].req.mid = r1.result.message_id;
       await this.saveChat(dataId, c);
       return ans();
+    }
+    if (k === 'RW' || k === 'RWo') {
+      const no = nextOpening();
+      if (!no) return ans();
+      let p, meds;
+      if (k === 'RW') {
+        const fl2 = c.flows[uid]; const rq = fl2 && fl2.req;
+        if (!rq) return ans('Ricomincia dalla richiesta ricette');
+        p = c.persons.find(x => x.id === rq.pid);
+        const td = romeParts().date;
+        const all = [...c.meds.filter(m => m.person === rq.pid && !this.ended(m, td)), ...(c.occ || []).filter(o => o.person === rq.pid), ...(rq.extra || [])];
+        const seen = new Set(); meds = all.filter(m => rq.sel.includes(m.id) && !seen.has(m.id) && seen.add(m.id));
+      } else {
+        p = c.persons.find(x => x.id === r[0]);
+        meds = this.lowMeds(c).filter(m => m.person === r[0]);
+      }
+      if (!p || !meds.length) return ans('Nessun farmaco selezionato');
+      const target = isMirror ? realId : chatId;
+      acl.wakes = (acl.wakes || []).filter(w => !(w.chat === target && w.by === uid));   // una sola richiesta in attesa per persona
+      acl.wakes.push({ chat: target, by: uid, who, at: no.ts, until: no.until, to: (p.info || {}).to || '', names: meds.map(m => `${m.name}${m.dose ? ' ' + m.dose : ''}`), url: this.waUrl(p, this.waRequest(p, meds, who)), mirror: isMirror });
+      await this.saveAcl(acl);
+      if (k === 'RW' && isMirror) await this.del(chatId, mid);
+      return tg(this.env, 'answerCallbackQuery', { callback_query_id: q.id, text: `⏰ Ok! Ti avviso ${no.label}, quando lo studio apre.`, show_alert: true });
     }
     if (k === 'RN') {
       const p = c.persons.find(x => x.id === r[0]);
