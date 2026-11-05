@@ -63,7 +63,7 @@ const STUDIO = {
   0: [], 1: [['16:30', '19:00']], 2: [['08:30', '10:30'], ['16:30', '18:30']], 3: [['08:30', '11:30']],
   4: [['16:30', '19:00']], 5: [['08:30', '11:30']], 6: []
 };
-const ORARI_BTN = '🕐 Orari studio medico';
+const ORARI_BTN = '/orari 🕐 Orari studio';   // inizia con "/": arriva al bot anche con la privacy dei gruppi attiva
 const DOW_FULL = ['domenica', 'lunedì', 'martedì', 'mercoledì', 'giovedì', 'venerdì', 'sabato'];
 const hmShort = t => t.replace(/^0/, '');
 function studioLine(ts = Date.now()) {
@@ -379,9 +379,9 @@ export class Store {
   // Pulsante fisso in basso (tastiera del bot). Senza "/" funziona solo se la privacy del bot nei gruppi è disattivata.
   async setBottomKb(acl, mc, force) {
     acl.mcv = acl.mcv || {};
-    if (!force && (acl.mcv[mc] || 0) >= 7) return;
+    if (!force && (acl.mcv[mc] || 0) >= 8) return;
     const r = await this.send(mc, '🕐 Pulsante degli orari dello studio attivato qui sotto.', { keyboard: [[{ text: ORARI_BTN }]], resize_keyboard: true, is_persistent: true });
-    if (r.ok) { acl.mcv[r._chat || mc] = 7; acl.temp = acl.temp || []; acl.temp.push({ chat: r._chat || String(mc), mid: r.result.message_id, at: Date.now() + 60e3 }); await this.saveAcl(acl); }
+    if (r.ok) { acl.mcv[r._chat || mc] = 8; acl.temp = acl.temp || []; acl.temp.push({ chat: r._chat || String(mc), mid: r.result.message_id, at: Date.now() + 60e3 }); await this.saveAcl(acl); }
   }
   async sendTemp(acl, mc, text, minutes) {
     const r = await this.send(mc, text);
