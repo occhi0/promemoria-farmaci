@@ -556,14 +556,24 @@ export class Store {
   // tenendo i promemoria non ancora segnati e, nei gruppi semplici, pannello, terapia e "Da ordinare".
   async purge(chatId, fromMid, c, keepExtra = []) {
     const keep = new Set(keepExtra.filter(Boolean));
+    const known = [];   // promemoria già segnati: il bot conosce i loro id
     for (const [date, byKey] of Object.entries(c.sent || {}))
-      for (const [key, S] of Object.entries(byKey))
-        if (!this.getLog(c, date, key)) for (const [ch, m] of (S.msgs || (S.m ? [[chatId, S.m]] : []))) if (String(ch) === String(chatId)) keep.add(m);
+      for (const [key, S] of Object.entries(byKey)) {
+        const mine = (S.msgs || (S.m ? [[chatId, S.m]] : [])).filter(([ch]) => String(ch) === String(chatId)).map(([, m]) => m);
+        if (!this.getLog(c, date, key)) mine.forEach(m => keep.add(m)); else known.push(...mine);
+      }
+    // 1) quelli noti, uno alla volta (al massimo 35, per i limiti di Cloudflare)
+    let single = 0;
+    for (const m of known.slice(-35)) { const r = await this.del(chatId, m); if (r.ok) single++; }
+    // 2) il resto in blocco
     const ids = [];
-    for (let m = fromMid; m > fromMid - 1500 && m > 0; m--) if (!keep.has(m)) ids.push(m);
-    let done = 0;
-    for (let i = 0; i < ids.length; i += 100) { const r = await tg(this.env, 'deleteMessages', { chat_id: chatId, message_ids: ids.slice(i, i + 100) }); if (r.ok) done++; }
-    return done;
+    for (let m = fromMid; m > fromMid - 1000 && m > 0; m--) if (!keep.has(m)) ids.push(m);
+    let bulkOk = 0, err = '';
+    for (let i = 0; i < ids.length; i += 100) {
+      const r = await tg(this.env, 'deleteMessages', { chat_id: chatId, message_ids: ids.slice(i, i + 100) });
+      if (r.ok) bulkOk++; else if (!err) err = r.description || 'errore sconosciuto';
+    }
+    return { single, bulkOk, err };
   }
   schedDel(acl, chat, mid, minutes) { acl.temp = acl.temp || []; if (!acl.temp.some(t => t.chat === String(chat) && t.mid === mid)) acl.temp.push({ chat: String(chat), mid, at: Date.now() + minutes * 60e3 }); }
   unschedDel(acl, pairs) { acl.temp = (acl.temp || []).filter(t => !pairs.some(([ch, m]) => String(ch) === t.chat && m === t.mid)); }
@@ -681,10 +691,11 @@ export class Store {
         case '/storico': return this.screen(chatId, 'storico', this.historyView(c));
         case '/pulisci': {
           if (priv) return this.send(chatId, 'Questo comando si usa nei gruppi.');
-          await this.purge(chatId, msg.message_id, c);
+          const pr = await this.purge(chatId, msg.message_id, c);
           const a1 = await this.acl(); if (a1.scr) delete a1.scr[chatId]; if (a1.fm) for (const k of Object.keys(a1.fm)) if (k.startsWith(chatId + ':')) delete a1.fm[k]; await this.saveAcl(a1);
           const v = this.todayView(c);
-          return this.screen(chatId, 'oggi', '🧹 Pulito!\n\n' + v.text, v.kb);
+          const note = pr.bulkOk ? '' : `\n\n<i>Non sono riuscito a cancellare in blocco gli altri messaggi (Telegram: ${esc(pr.err)}). Cancellati ${pr.single} promemoria.</i>`;
+          return this.screen(chatId, 'oggi', '🧹 Pulito!' + note + '\n\n' + v.text, v.kb);
         }
         case '/esporta': return this.send(chatId, this.exportView(c, msg.chat.title));
         case '/terapia': return this.sendTherapy(chatId, c, msg.chat.title);
