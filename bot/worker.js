@@ -991,8 +991,8 @@ export class Store {
       const url = 'https://wa.me/?text=' + encodeURIComponent(this.waRequest(p, low.filter(m => m.person === pid)));
       kb.push([{ text: `📤 Invia richiesta${info.to ? ' a ' + info.to : ''}${pids.length > 1 ? ' · ' + p.name : ''}`.slice(0, 60), url }]);
     }
-    for (const m of low) if (m.pack) kb.push([{ text: `✅ Comprato ${m.name} (+${m.pack})`.slice(0, 60), callback_data: `SA|${m.id}|1` }]);
-    t += `\n\nTocca 📤 per mandare la richiesta delle ricette su WhatsApp. Quando un farmaco è stato comprato tocca ✅: la scorta si aggiorna e il farmaco esce dalla lista.`;
+    for (const m of low) if (m.pack) kb.push([{ text: `📥 Ritirato ${m.name} (+${m.pack})`.slice(0, 60), callback_data: `SA|${m.id}|1` }]);
+    t += `\n\nTocca 📤 per mandare la richiesta delle ricette su WhatsApp. Quando un farmaco è stato ritirato in farmacia tocca 📥: la scorta si aggiorna e il farmaco esce dalla lista.`;
     if (missing) t += `\n\n<i>Mancano i dati dell'assistita: impostali nel gruppo principale da /scorte → Richiedi ricette.</i>`;
     const markup = { inline_keyboard: kb };
     const isNew = P.orderKeys !== undefined && low.some(m => !P.orderKeys.split(',').includes(m.id));
@@ -1336,7 +1336,7 @@ export class Store {
       await this.saveChat(dataId, c);
       await this.refreshPanels(acl, dataId, c);
       if (isMirror) {   // dal messaggio "Da ordinare": avvisiamo anche il gruppo principale
-        await this.send(dataId, `🛒 <b>${esc(m.name)}</b> comprato${who ? ' da ' + esc(who) : ''}: +${q} compresse (ora ${m.stock}).`, { inline_keyboard: [[{ text: `↩️ Annulla (−${q})`, callback_data: `SU|${m.id}|${q}` }]] });
+        await this.send(dataId, `📥 <b>${esc(m.name)}</b> ritirato${who ? ' da ' + esc(who) : ''}: +${q} compresse (ora ${m.stock}).`, { inline_keyboard: [[{ text: `↩️ Annulla (−${q})`, callback_data: `SU|${m.id}|${q}` }]] });
         return ans(`+${q} compresse`);
       }
       const v = this.stockCard(c, m, k === 'SA' ? `✅ Aggiunte ${q} compresse${who ? ' · ' + esc(who) : ''}.` : `↩️ Tolte ${q} compresse.`);
