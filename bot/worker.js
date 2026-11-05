@@ -288,9 +288,16 @@ export class Store {
     if (touched) { acl.cmdv = 0; await this.saveAcl(acl); console.log('migrato', oldId, '→', newId); }
   }
   async send(chatId, text, markup, extra = {}) {
-    const thread = this._thread && String(this._thread.chat) === String(chatId) ? { message_thread_id: this._thread.id } : {};
+    // Nei gruppi con i topic: si risponde nel topic da cui arriva il comando; altrimenti nel topic "casa" dei farmaci (se impostato)
+    const acl = this._acl || await this.acl();
+    const home = acl.home && acl.home[String(chatId)];
+    const thread = this._thread && String(this._thread.chat) === String(chatId) ? { message_thread_id: this._thread.id } : home ? { message_thread_id: home } : {};
     const body = { chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true, ...thread, ...(markup ? { reply_markup: markup } : {}), ...extra };
     let r = await tg(this.env, 'sendMessage', body);
+    if (r && !r.ok && body.message_thread_id && /thread not found|topic/i.test(r.description || '')) {   // topic cancellato: torna in General
+      if (home === body.message_thread_id) { delete acl.home[String(chatId)]; await this.saveAcl(acl); }
+      delete body.message_thread_id; r = await tg(this.env, 'sendMessage', body);
+    }
     const nid = r && !r.ok && r.parameters && r.parameters.migrate_to_chat_id;
     if (nid) { await this.migrateChat(chatId, nid); r = await tg(this.env, 'sendMessage', { ...body, chat_id: nid }); }
     if (r) r._chat = String(nid || chatId);
@@ -631,7 +638,7 @@ export class Store {
     if (msg && msg.migrate_to_chat_id) return this.migrateChat(msg.chat.id, msg.migrate_to_chat_id);
     if (msg && msg.migrate_from_chat_id) return this.migrateChat(msg.migrate_from_chat_id, msg.chat.id);
     // Gruppo semplice: via i messaggi di servizio (nome cambiato, messaggio fissato, ingressi, foto…)
-    const SERVICE = ['new_chat_title', 'new_chat_photo', 'delete_chat_photo', 'pinned_message', 'new_chat_members', 'left_chat_member', 'message_auto_delete_timer_changed', 'video_chat_scheduled', 'video_chat_started', 'video_chat_ended', 'boost_added', 'chat_background_set'];
+    const SERVICE = ['new_chat_title', 'new_chat_photo', 'delete_chat_photo', 'pinned_message', 'new_chat_members', 'left_chat_member', 'message_auto_delete_timer_changed', 'video_chat_scheduled', 'video_chat_started', 'video_chat_ended', 'boost_added', 'chat_background_set', 'forum_topic_edited', 'forum_topic_closed', 'forum_topic_reopened', 'general_forum_topic_hidden', 'general_forum_topic_unhidden'];
     if (msg && SERVICE.some(k => msg[k] !== undefined)) {
       const a0 = await this.acl();
       const cid = String(msg.chat.id);
@@ -710,7 +717,13 @@ export class Store {
         case '/annulla':
           delete c.flows[uid]; await this.saveChat(chatId, c);
           return this.send(chatId, 'Operazione annullata.', { remove_keyboard: true, selective: true });
-        case '/oggi': { const v = this.todayView(c); return this.screen(chatId, 'oggi', v.text, v.kb); }
+        case '/oggi': {
+          // /oggi scritto in un topic (non quello delle analisi) lo rende il topic dei farmaci: promemoria e pannelli arriveranno lì
+          const a3 = await this.acl(), cur = (a3.home || {})[chatId] || null, lab = (a3.labThread || {})[chatId];
+          const want = this._thread && this._thread.id !== lab ? this._thread.id : (!this._thread ? null : cur);
+          if (chatId.startsWith('-') && want !== cur) { a3.home = a3.home || {}; if (want) a3.home[chatId] = want; else delete a3.home[chatId]; await this.saveAcl(a3); }
+          const v = this.todayView(c); return this.screen(chatId, 'oggi', v.text, v.kb);
+        }
         case '/farmaci': { const v = this.medsView(c); return this.screen(chatId, 'farmaci', v.text, v.kb); }
         case '/scorte': {
           const has = c.meds.some(m => !this.ended(m, romeParts().date));
