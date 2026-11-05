@@ -103,6 +103,7 @@ function parsePeriod(text, today) {
   return { start: a, end: b };
 }
 const isForever = s => /^(sempre|per sempre|nessuna|continua|cronico|senza fine|no)$/i.test(s.trim());
+const shortName = n => String(n || '').split(' (')[0].trim() || n;   // "Micardis (Telmisartan…)" → "Micardis" per i pulsanti
 const isSkip = s => /^(-|–|—|salta|saltare|per saltare|skip|no|niente|nessuno|non so|boh)$/i.test(s.trim().replace(/[.!]+$/, ''));
 const firstNum = s => { const m = s.match(/\d+/); return m ? parseInt(m[0], 10) : NaN; };
 const daysText = days => (!days.length || days.length === 7) ? 'tutti i giorni' : [1, 2, 3, 4, 5, 6, 0].filter(d => days.includes(d)).map(d => DOW_SHORT[d]).join(', ');
@@ -295,7 +296,7 @@ export class Store {
   // Avviso scorte: a 7 giorni e poi a 2 giorni, una volta per livello.
   packKb(m) {
     const rows = [];
-    if (m.pack) rows.push([{ text: `➕ 1 confezione (+${m.pack})`, callback_data: `SA|${m.id}|1` }, { text: `➕ 2 (+${m.pack * 2})`, callback_data: `SA|${m.id}|2` }]);
+    if (m.pack) rows.push([{ text: `➕ 1 conf. (+${m.pack})`, callback_data: `SA|${m.id}|1` }, { text: `➕ 2 conf. (+${m.pack * 2})`, callback_data: `SA|${m.id}|2` }]);
     rows.push([{ text: m.pack ? '📦 Scorte' : '📦 Aggiorna scorte', callback_data: 'SK|' + m.id }]);
     return { inline_keyboard: rows };
   }
@@ -305,7 +306,7 @@ export class Store {
     t += m.stock == null ? 'Scorte non conteggiate.' : `Scorte: <b>${m.stock}</b> compresse${left != null ? `, circa ${left} ${left === 1 ? 'giorno' : 'giorni'}` : ''}.`;
     t += m.pack ? `\nConfezione da ${m.pack}.` : '\nNon so ancora quante compresse ci sono in una confezione.';
     const kb = [];
-    if (m.pack) kb.push([{ text: `➕ 1 confezione (+${m.pack})`, callback_data: `SA|${m.id}|1` }, { text: `➕ 2 confezioni (+${m.pack * 2})`, callback_data: `SA|${m.id}|2` }]);
+    if (m.pack) kb.push([{ text: `➕ 1 conf. (+${m.pack})`, callback_data: `SA|${m.id}|1` }, { text: `➕ 2 conf. (+${m.pack * 2})`, callback_data: `SA|${m.id}|2` }]);
     else kb.push([{ text: '⚙️ Imposta compresse per confezione', callback_data: 'PK|' + m.id }]);
     kb.push([{ text: '✏️ Scrivi il numero', callback_data: 'MS|' + m.id }].concat(m.pack ? [{ text: '⚙️ Confezione', callback_data: 'PK|' + m.id }] : []));
     kb.push([{ text: '⬅️ Farmaco', callback_data: 'MM|' + m.id }]);
@@ -545,7 +546,7 @@ export class Store {
           const ms = c.meds.filter(m => !this.ended(m, td)).sort((a, b) => dl(a) - dl(b) || a.name.localeCompare(b.name, 'it', { sensitivity: 'base' }));
           const seen = new Set(); const uniq = ms.filter(m => { const k2 = (m.name + '|' + m.dose).toLowerCase(); if (seen.has(k2)) return false; seen.add(k2); return true; });
           const rows = [];
-          for (let i = 0; i < uniq.length; i += 2) rows.push(uniq.slice(i, i + 2).map(m => ({ text: `📦 ${m.name}`.slice(0, 32), callback_data: 'SK|' + m.id })));
+          for (let i = 0; i < uniq.length; i += 2) rows.push(uniq.slice(i, i + 2).map(m => ({ text: `📦 ${shortName(m.name)}`.slice(0, 32), callback_data: 'SK|' + m.id })));
           rows.push([{ text: '📤 Richiedi ricette', callback_data: 'RQ' }]);
           return this.send(chatId, this.stockView(c) + '\n\nTocca un farmaco per aggiungere una confezione.', { inline_keyboard: rows });
         }
@@ -881,7 +882,7 @@ export class Store {
       let ic;
       if (e) { ic = e.s === 'taken' ? '✅' : '⏭'; if (e.s === 'taken') taken++; }
       else if (toMin(d.time) > n.min) ic = '⏳';
-      else { ic = n.min - toMin(d.time) > 60 ? '❗' : '🔔'; kb.push([{ text: `✅ ${d.time} ${d.m.name}${this.pdot(c, d.m.person, true)}`.slice(0, 60), callback_data: `O|${n.date}|${d.m.id}|${d.time}` }]); }
+      else { ic = n.min - toMin(d.time) > 60 ? '❗' : '🔔'; kb.push([{ text: `✅ ${d.time} ${shortName(d.m.name)}${this.pdot(c, d.m.person, true)}`.slice(0, 60), callback_data: `O|${n.date}|${d.m.id}|${d.time}` }]); }
       return `${ic} ${d.time}  ${this.multi(c) ? '<b>' + esc(this.person(c, d.m.person)) + '</b> · ' : ''}${esc(d.m.name)}${d.m.dose ? ' ' + esc(d.m.dose) : ''}${panel && e && e.by ? ' · <i>' + esc(e.by) + '</i>' : ''}`;
     });
     const text = `📅 <b>Oggi, ${fmtDate(n.date)}</b>\n${taken} di ${ds.length} dosi prese\n\n${lines.join('\n')}${kb.length ? '\n\nTocca per segnare come prese:' : ''}`;
@@ -993,13 +994,13 @@ export class Store {
       kb.push([{ text: `📤 Invia richiesta${info.to ? ' a ' + info.to : ''}${pids.length > 1 ? ' · ' + p.name : ''}`.slice(0, 60), url }]);
     }
     for (const m of low) if (m.pack) kb.push([
-      { text: `☑️ Ritirato ${m.name} · 2 conf. (+${m.pack * 2})`.slice(0, 60), callback_data: `SA|${m.id}|2` },
+      { text: `☑️ ${shortName(m.name)} · 2 conf. (+${m.pack * 2})`.slice(0, 60), callback_data: `SA|${m.id}|2` },
       { text: `1 conf. (+${m.pack})`, callback_data: `SA|${m.id}|1` }
     ]);
     const noPack = low.filter(m => !m.pack);
     t += `\n\n👉 Tocca <b>Invia richiesta</b> per mandare la richiesta delle ricette su WhatsApp.`;
-    if (low.some(m => m.pack)) t += `\n👉 Quando un farmaco è stato ritirato in farmacia, tocca <b>Ritirato</b>: la scorta si aggiorna e il farmaco esce dalla lista.`;
-    if (noPack.length) t += `\n\n<i>Per avere il pulsante "Ritirato" anche per ${noPack.map(m => esc(m.name)).join(', ')}, nel gruppo principale imposta le compresse per confezione (/scorte → farmaco → ⚙️).</i>`;
+    if (low.some(m => m.pack)) t += `\n👉 Quando un farmaco è stato ritirato in farmacia, tocca il suo pulsante <b>☑️</b> qui sotto (2 confezioni, oppure "1 conf."): la scorta si aggiorna e il farmaco esce dalla lista.`;
+    if (noPack.length) t += `\n\n<i>Per avere il pulsante ☑️ anche per ${noPack.map(m => esc(m.name)).join(', ')}, nel gruppo principale imposta le compresse per confezione (/scorte → farmaco → ⚙️).</i>`;
     if (missing) t += `\n\n<i>Mancano i dati dell'assistita: impostali nel gruppo principale da /scorte → Richiedi ricette.</i>`;
     const markup = { inline_keyboard: kb };
     const isNew = P.orderKeys !== undefined && low.some(m => !P.orderKeys.split(',').includes(m.id));
@@ -1025,7 +1026,7 @@ export class Store {
     const chosen = uniq.filter(m => rq.sel.includes(m.id));
     const wa = this.waRequest(p, chosen, who);
     const text = `📤 <b>Richiesta ricette</b> — ${esc(info.full || p.name)}${info.to ? '\nDestinatario: ' + esc(info.to) : ''}${info.birth ? '\nData di nascita: ' + esc(info.birth) : ''}${info.cf ? '\nC.F. ' + esc(info.cf) : ''}\n\nTocca i farmaci per sceglierli (✅ = da richiedere). Sono già selezionati quelli con ${YELLOW_DAYS} giorni o meno.`;
-    const kb = uniq.map(m => { const d = left(m); return [{ text: `${rq.sel.includes(m.id) ? '✅' : '⬜'} ${m.name}${m.dose ? ' ' + m.dose : ''}${d != null ? ` · ${d} gg` : ''}`.slice(0, 60), callback_data: 'RT|' + m.id }]; });
+    const kb = uniq.map(m => { const d = left(m); return [{ text: `${rq.sel.includes(m.id) ? '✅' : '⬜'} ${shortName(m.name)}${m.dose ? ' ' + m.dose : ''}${d != null ? ` · ${d} gg` : ''}`.slice(0, 60), callback_data: 'RT|' + m.id }]; });
     if (chosen.length) kb.push([{ text: `📤 Invia su WhatsApp (${chosen.length})`, url: 'https://wa.me/?text=' + encodeURIComponent(wa) }]);
     kb.push([{ text: '✏️ Dati assistita', callback_data: 'RI|' + p.id }, { text: 'Chiudi', callback_data: 'RX' }]);
     return { text, kb: { inline_keyboard: kb } };
