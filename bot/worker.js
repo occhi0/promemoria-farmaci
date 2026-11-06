@@ -846,8 +846,14 @@ export class Store {
         return this.ask(chatId, 'Dosaggio? Ad esempio <i>5 mg</i> o <i>1 compressa</i>.\nOppure scrivi <b>salta</b>.', mid, 'Es. 5 mg');
       case 'dose':
         d.dose = isSkip(text) ? '' : text.slice(0, 40); fl.step = 'times'; await save();
-        return this.ask(chatId, 'A che ore va preso? Scrivi uno o più orari, ad esempio:\n<code>8 20</code> oppure <code>08:00 13:30 21:00</code>', mid, 'Es. 8 13 20');
+        return this.ask(chatId, 'A che ore va preso? Scrivi uno o più orari, ad esempio:\n<code>8 20</code> oppure <code>08:00 13:30 21:00</code>\nSe si prende solo quando serve, scrivi <b>al bisogno</b>.', mid, 'Es. 8 13 20');
       case 'times': {
+        if (/^\s*(al\s+)?bisogno\s*$/i.test(text)) {   // farmaco al bisogno: niente orari né promemoria
+          c.occ = c.occ || [];
+          if (!c.occ.some(o => o.name.toLowerCase() === d.name.toLowerCase())) c.occ.push({ id: rid(), person: d.person, name: d.name, dose: d.dose || '' });
+          delete c.flows[uid]; await save();
+          return this.send(chatId, `💊 <b>${esc(d.name)}${d.dose ? ' ' + esc(d.dose) : ''}</b> salvato tra i farmaci <b>al bisogno</b>.\nNiente promemoria: quando lo dai, tocca <b>💊 Al bisogno</b> sotto il pannello Oggi. Compare anche in /terapia e nella richiesta ricette.`);
+        }
         const t = parseTimes(text);
         if (!t) return this.ask(chatId, 'Non ho capito gli orari 🤔 Riprova, ad esempio <code>8 20</code> oppure <code>07:30 19:30</code>.', mid, 'Es. 8 20');
         d.times = t; fl.step = 'days'; await save();
