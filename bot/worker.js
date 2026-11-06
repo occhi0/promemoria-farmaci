@@ -580,6 +580,16 @@ export class Store {
     this._sentLog = [];
     const m0 = up.message || (up.callback_query && up.callback_query.message);
     this._thread = m0 && m0.is_topic_message && m0.message_thread_id ? { chat: String(m0.chat.id), id: m0.message_thread_id } : null;
+    if (up.message && m0.chat && m0.chat.type === 'supergroup' && m0.chat.is_forum === undefined) {   // gruppo semplice con i topic spenti: dimentichiamo i topic salvati
+      const a0 = await this.acl(), id0 = String(m0.chat.id);
+      if (a0.mirrors && a0.mirrors[id0] && ((a0.labThread || {})[id0] || (a0.home || {})[id0])) {
+        const P = (a0.panels || {})[id0];
+        if ((a0.labThread || {})[id0] && a0.mirrors && a0.mirrors[id0] && P && P.labs) { await this.del(id0, P.labs); delete P.labs; }
+        if (a0.labThread) delete a0.labThread[id0];
+        if (a0.home) delete a0.home[id0];
+        await this.saveAcl(a0);
+      }
+    }
     const res = await this.onUpdateInner(up);
     try { await this.tidyFlow(up); } catch (e) { console.log('tidy', e && e.stack || e); }
     return res;
