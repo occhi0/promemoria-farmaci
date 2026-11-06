@@ -183,6 +183,7 @@ All'orario di ogni dose ti mando un messaggio con i pulsanti ✅ Preso, ⏰ ${SN
 /scorte – compresse rimaste
 /storico – terapie a tempo, in corso e concluse
 /saltate – dosi saltate negli ultimi 90 giorni, con il motivo
+/bisogno – farmaci al bisogno dati negli ultimi 90 giorni
 /analisi – elenco delle analisi (meglio nel topic 🩸 Analisi)
 /terapia – elenco della terapia da mostrare al medico
 /esporta – copia di sicurezza completa
@@ -201,6 +202,7 @@ const COMMANDS = [
   { command: 'esporta', description: 'Copia di sicurezza completa' },
   { command: 'trasferisci', description: 'Sposta farmaci nel gruppo' },
   { command: 'saltate', description: 'Dosi saltate e motivo' },
+  { command: 'bisogno', description: 'Farmaci al bisogno dati' },
   { command: 'analisi', description: 'Elenco delle analisi del sangue' },
   { command: 'pulisci', description: 'Cancella i messaggi vecchi del gruppo' },
   { command: 'annulla', description: "Interrompi l'operazione in corso" },
@@ -416,7 +418,7 @@ export class Store {
     await tg(this.env, 'setMyCommands', { commands: COMMANDS, scope: { type: 'all_private_chats' } });
     for (const id of Object.keys(acl.chats)) if (id.startsWith('-')) await tg(this.env, 'setMyCommands', { commands: COMMANDS, scope: { type: 'chat', chat_id: Number(id) } });
     for (const id of Object.keys(acl.mirrors || {})) await tg(this.env, 'deleteMyCommands', { scope: { type: 'chat', chat_id: Number(id) } });
-    acl.cmdv = 8; await this.saveAcl(acl);
+    acl.cmdv = 9; await this.saveAcl(acl);
   }
   // Pulsante fisso in basso (tastiera del bot). Senza "/" funziona solo se la privacy del bot nei gruppi è disattivata.
   async setBottomKb(acl, mc, force) {
@@ -489,7 +491,7 @@ export class Store {
   async tick(nowTs) {
     const n = romeParts(nowTs);
     const acl = await this.acl();
-    if (acl.admin && acl.cmdv !== 8) await this.syncCommands(acl);
+    if (acl.admin && acl.cmdv !== 9) await this.syncCommands(acl);
     if ((acl.wakes || []).some(w => w.at <= nowTs)) {
       for (const w of acl.wakes.filter(w => w.at <= nowTs)) {
         const txt = `🟢 <b>Lo studio è aperto</b> (fino alle ${w.until}).\nEcco la richiesta ${w.kind === 'lab' ? 'analisi' : 'ricette'} preparata${w.who ? ' da ' + esc(w.who) : ''}:\n\n${w.names.map(n => '• ' + esc(n)).join('\n')}\n\n👉 Tocca il pulsante qui sotto per inviarla${w.to ? ' a ' + esc(w.to) : ''} su WhatsApp.`;
@@ -553,6 +555,7 @@ export class Store {
       const keepSent = addDays(n.date, -1).date, keepLog = addDays(n.date, -90).date;
       for (const k of Object.keys(c.sent)) if (k < keepSent) { delete c.sent[k]; changed = true; }
       for (const k of Object.keys(c.log)) if (k < keepLog) { delete c.log[k]; changed = true; }
+      if ((c.prn || []).some(x => x.date < keepLog)) { c.prn = c.prn.filter(x => x.date >= keepLog); changed = true; }
       if (!Object.keys(c.sent[n.date]).length) delete c.sent[n.date];
       if (changed) await this.saveChat(chatId, c);
       // pannelli dei gruppi semplici: aggiornati se è successo qualcosa o se è cambiato il giorno
@@ -681,6 +684,7 @@ export class Store {
         const sc0 = await this.chat(src); const fl0 = sc0.flows[uid];
         if (fl0 && fl0.step === 'occ_name') return this.occName(src, sc0, uid, fl0, text, msg.message_id);
         if (fl0 && fl0.step === 'skip_reason') return this.skipReason(src, sc0, uid, fl0, text, msg.message_id, chatId);
+        if (fl0 && (fl0.step === 'prn_new' || fl0.step === 'prn_reason')) return this.flowInput(src, sc0, uid, fl0, text, msg.message_id);
       }
       if (!cmd && text === ORARI_BTN) { await this.del(chatId, msg.message_id); return this.sendTemp(acl, chatId, studioTable(this.contact(await this.chat(acl.mirrors[chatId]))), 5); }
       if (cmd) await this.del(chatId, msg.message_id);   // pagina pulita: via i comandi scritti
@@ -771,6 +775,7 @@ export class Store {
         }
         case '/storico': return this.screen(chatId, 'storico', this.historyView(c));
         case '/saltate': return this.screen(chatId, 'saltate', this.skippedView(c));
+        case '/bisogno': return this.screen(chatId, 'bisogno', this.prnHistory(c));
         case '/analisi': {
           if (this._thread) { const a2 = await this.acl(); a2.labThread = a2.labThread || {}; a2.labThread[chatId] = this._thread.id; await this.saveAcl(a2); }
           return this.showLabs(chatId, c);
@@ -937,6 +942,21 @@ export class Store {
       }
       case 'occ_name': return this.occName(chatId, c, uid, fl, text, mid);
       case 'skip_reason': return this.skipReason(chatId, c, uid, fl, text, mid, chatId);
+      case 'prn_new': {   // nuovo farmaco al bisogno: lo salvo e segno subito la somministrazione
+        const nm = text.trim().slice(0, 60);
+        c.occ = c.occ || [];
+        let o = c.occ.find(x => x.name.toLowerCase() === nm.toLowerCase());
+        if (!o) { o = { id: rid(), person: (c.persons[0] || {}).id, name: nm, dose: '' }; c.occ.push(o); }
+        delete c.flows[uid];
+        return this.prnGive(await this.acl(), chatId, c, d.view, o, d.who);
+      }
+      case 'prn_reason': {
+        const e = (c.prn || []).find(x => x.id === d.id); if (e) e.r = text.trim().slice(0, 60);
+        delete c.flows[uid]; await save();
+        const a = await this.acl(); await this.refreshPanels(a, chatId, c); await this.refreshMainToday(a, chatId, c);
+        if (d.q) await this.del(d.view, d.q);
+        return;
+      }
       case 'lab_add': {
         c.labs = c.labs || { routine: [], occ: [] };
         const today = romeParts().date;
@@ -1197,6 +1217,40 @@ export class Store {
     if (mid) { const r = await this.edit(chatId, mid, v.text, v.kb); if (r.ok || /not modified/i.test(r.description || '')) return; }
     return this.screen(chatId, 'analisi', v.text, v.kb);
   }
+  // ── farmaci al bisogno: somministrazioni (c.prn = [{id, med, name, t, date, hm, by, r}]) ──
+  prnToday(c, date) {
+    const L = (c.prn || []).filter(x => x.date === date);
+    return L.length ? '\n\n<b>Al bisogno</b>\n' + L.map(x => `💊 ${x.hm}  ${esc(x.name)}${x.r ? ' (' + esc(x.r) + ')' : ''}${x.by ? ' · <i>' + esc(x.by) + '</i>' : ''}`).join('\n') : '';
+  }
+  prnPick(c) {
+    const occ = c.occ || [];
+    const kb = occ.map(o => [{ text: `💊 ${o.name}`.slice(0, 60), callback_data: 'PG|' + o.id }]);
+    kb.push([{ text: '➕ Nuovo farmaco', callback_data: 'PW' }, { text: 'Chiudi', callback_data: 'PX' }]);
+    return { text: '💊 <b>Al bisogno</b>\n' + (occ.length ? 'Tocca il farmaco che hai dato: segno l\'ora e chi l\'ha dato.' : 'Nessun farmaco al bisogno salvato: tocca ➕ Nuovo farmaco.'), kb: { inline_keyboard: kb } };
+  }
+  async prnGive(acl, dataId, c, view, o, who) {
+    const n = romeParts();
+    c.prn = c.prn || [];
+    const e = { id: rid(), med: o.id, name: o.name + (o.dose ? ' ' + o.dose : ''), t: Date.now(), date: n.date, hm: n.hm, by: who || '' };
+    c.prn.push(e); await this.saveChat(dataId, c);
+    await this.refreshPanels(acl, dataId, c); await this.refreshMainToday(acl, dataId, c);
+    const R = [['🤕 Dolore', 'd'], ['🌡 Febbre', 'f'], ['😖 Prurito', 'p'], ['😟 Agitazione', 'a'], ['🤢 Nausea', 'n'], ['✏️ Altro', 'o']];
+    const base = 'PR|' + e.id + '|';
+    const qk = { inline_keyboard: [R.slice(0, 3).map(([t, x]) => ({ text: t, callback_data: base + x })), R.slice(3).map(([t, x]) => ({ text: t, callback_data: base + x })), [{ text: 'Nessun motivo', callback_data: base + '-' }]] };
+    const qm = await this.send(view, `💊 Segnato: <b>${esc(e.name)}</b> alle ${e.hm}${who ? ' · ' + esc(who) : ''}.\nPer cosa?`, qk);
+    if (qm.ok) { this.schedDel(acl, view, qm.result.message_id, 30); await this.saveAcl(acl); }
+  }
+  async refreshMainToday(acl, dataId, c) {   // aggiorna la schermata Oggi del gruppo principale, se c'è
+    const S = (acl.scr || {})[dataId]; if (!S || !S.oggi) return;
+    const v = this.todayView(c); await this.edit(dataId, S.oggi, v.text, v.kb);
+  }
+  prnHistory(c) {
+    const by = {};
+    for (const x of (c.prn || [])) (by[x.date] = by[x.date] || []).push(x);
+    const days = Object.keys(by).sort().reverse();
+    if (!days.length) return '💊 <b>Al bisogno</b> (ultimi 90 giorni)\n\n<i>Nessuna somministrazione segnata.</i>';
+    return '💊 <b>Al bisogno</b> (ultimi 90 giorni)\n' + days.map(d => `\n<b>${fmtDate(d)}</b>\n` + by[d].sort((a, b) => a.t - b.t).map(x => `• ${x.hm} ${esc(x.name)}${x.r ? ' — <i>' + esc(x.r) + '</i>' : ''}${x.by ? ' · ' + esc(x.by) : ''}`).join('\n')).join('\n');
+  }
   // motivo di una dose saltata (scritto a mano)
   async skipReason(dataId, c, uid, fl, text, mid, view) {
     const d = fl.d, e = (c.log[d.date] || {})[d.key];
@@ -1262,10 +1316,12 @@ export class Store {
   }
   todayView(c, panel) {
     const n = romeParts();
-    const pkb = panel ? { inline_keyboard: [[{ text: '🔄', callback_data: 'OR' }, { text: '🩺 Terapia', callback_data: 'TP' }, { text: '📤 Ricette', callback_data: 'RQ' }]] } : undefined;
-    if (!c.meds.length) return { text: 'Non ci sono ancora farmaci. Usa /aggiungi per inserirne uno.', kb: pkb };
+    const PRN = [{ text: '💊 Al bisogno', callback_data: 'PB' }];
+    const pkb = panel ? { inline_keyboard: [[{ text: '🔄', callback_data: 'OR' }, { text: '🩺 Terapia', callback_data: 'TP' }, { text: '📤 Ricette', callback_data: 'RQ' }], PRN] } : { inline_keyboard: [PRN] };
+    const prnTxt = this.prnToday(c, n.date);
+    if (!c.meds.length) return { text: 'Non ci sono ancora farmaci. Usa /aggiungi per inserirne uno.' + prnTxt, kb: pkb };
     const ds = this.dosesOn(c, n.date, n.dow);
-    if (!ds.length) return { text: `📅 <b>Oggi, ${fmtDate(n.date)}</b>\nNessuna dose prevista.`, kb: pkb };
+    if (!ds.length) return { text: `📅 <b>Oggi, ${fmtDate(n.date)}</b>\nNessuna dose prevista.` + prnTxt, kb: pkb };
     let taken = 0;
     const kb = [];
     const lines = ds.map(d => {
@@ -1276,8 +1332,9 @@ export class Store {
       else { ic = n.min - toMin(d.time) > 60 ? '❗' : '🔔'; kb.push([{ text: `✅ ${d.time} ${shortName(d.m.name)}${this.pdot(c, d.m.person, true)}`.slice(0, 60), callback_data: `O|${n.date}|${d.m.id}|${d.time}` }]); }
       return `${ic} ${d.time}  ${this.multi(c) ? '<b>' + esc(this.person(c, d.m.person)) + '</b> · ' : ''}${esc(d.m.name)}${d.m.dose ? ' ' + esc(d.m.dose) : ''}${panel && e && e.by ? ' · <i>' + esc(e.by) + '</i>' : ''}`;
     });
-    const text = `📅 <b>Oggi, ${fmtDate(n.date)}</b>\n${taken} di ${ds.length} dosi prese\n\n${lines.join('\n')}${kb.length ? '\n\nTocca per segnare come prese:' : ''}`;
+    const text = `📅 <b>Oggi, ${fmtDate(n.date)}</b>\n${taken} di ${ds.length} dosi prese\n\n${lines.join('\n')}${prnTxt}${kb.length ? '\n\nTocca per segnare come prese:' : ''}`;
     kb.push(panel ? [{ text: '🔄', callback_data: 'OR' }, { text: '🩺 Terapia', callback_data: 'TP' }, { text: '📤 Ricette', callback_data: 'RQ' }] : [{ text: '🔄 Aggiorna', callback_data: 'OR' }]);
+    kb.push(PRN);
     return { text: panel ? text + `\n\n<i>Quando arriva un promemoria tocca ✅ Preso (⏰ per rimandare, ⏭ per saltare). Aggiornato alle ${n.hm}.</i>` : text, kb: { inline_keyboard: kb } };
   }
   medsView(c) {
@@ -1540,7 +1597,7 @@ export class Store {
     const c = await this.chat(dataId);
     const [k, ...r] = data.split('|');
     const today = romeParts().date;
-    if (isMirror && !['T', 'S', 'Z', 'U', 'O', 'OR', 'TP', 'SA', 'OS', 'RQ', 'RT', 'RA', 'RS', 'RX', 'RW', 'RWo', 'LQ', 'LT', 'LW', 'LQX', 'SR'].includes(k)) return ans();
+    if (isMirror && !['T', 'S', 'Z', 'U', 'O', 'OR', 'TP', 'SA', 'OS', 'RQ', 'RT', 'RA', 'RS', 'RX', 'RW', 'RWo', 'LQ', 'LT', 'LW', 'LQX', 'SR', 'PB', 'PG', 'PW', 'PX', 'PR'].includes(k)) return ans();
 
     if (['T', 'S', 'Z', 'U', 'O'].includes(k)) {
       const [date, medId, time] = r;
@@ -1595,6 +1652,29 @@ export class Store {
         if (qm.ok) this.schedDel(acl, view, qm.result.message_id, 30), await this.saveAcl(acl);
       }
       return ans(answer);
+    }
+    if (['PB', 'PG', 'PW', 'PX', 'PR'].includes(k)) {
+      const view = isMirror ? realId : chatId;
+      if (k === 'PX') { await this.del(view, mid); return ans(); }
+      if (k === 'PB') { const v = this.prnPick(c); await this.screen(view, 'prn', v.text, v.kb); return ans(); }
+      if (k === 'PW') {
+        c.flows[uid] = { step: 'prn_new', d: { view, who } }; await this.saveChat(dataId, c); await this.del(view, mid);
+        await this.ask(view, 'Quale farmaco al bisogno hai dato? Lo salvo per le prossime volte.', null, 'Es. Tachipirina 1000 mg'); return ans();
+      }
+      if (k === 'PG') {
+        const o = (c.occ || []).find(x => x.id === r[0]); if (!o) return ans('Farmaco non trovato');
+        await this.del(view, mid); await this.prnGive(acl, dataId, c, view, o, who); return ans('Segnato');
+      }
+      // PR: motivo
+      const e = (c.prn || []).find(x => x.id === r[0]); if (!e) { await this.del(view, mid); return ans(); }
+      if (r[1] === 'o') {
+        c.flows[uid] = { step: 'prn_reason', d: { id: e.id, q: mid, view } }; await this.saveChat(dataId, c);
+        await this.ask(view, 'Scrivi il motivo:', null, 'Es. dolore al ginocchio'); return ans();
+      }
+      const M = { d: 'dolore', f: 'febbre', p: 'prurito', a: 'agitazione', n: 'nausea' };
+      if (M[r[1]]) e.r = M[r[1]]; else delete e.r;
+      await this.saveChat(dataId, c); await this.del(view, mid); await this.refreshPanels(acl, dataId, c); await this.refreshMainToday(acl, dataId, c);
+      return ans(M[r[1]] ? 'Motivo: ' + M[r[1]] : 'Ok');
     }
     if (k === 'SR') {
       const [date, medId, time, x] = r, key = medId + '@' + time, view = isMirror ? realId : chatId;
