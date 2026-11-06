@@ -1241,7 +1241,9 @@ export class Store {
     const occ = c.occ || [];
     const kb = occ.map(o => [{ text: `💊 ${o.name}${o.dose ? ' ' + o.dose : ''}`.slice(0, 60), callback_data: 'PG|' + o.id }]);
     kb.push([{ text: '➕ Nuovo farmaco', callback_data: 'PW' }, { text: 'Chiudi', callback_data: 'PX' }]);
-    return { text: '💊 <b>Al bisogno</b>\n' + (occ.length ? 'Tocca il farmaco che hai dato: segno l\'ora e chi l\'ha dato.' : 'Nessun farmaco al bisogno salvato: tocca ➕ Nuovo farmaco.'), kb: { inline_keyboard: kb } };
+    const today = romeParts().date, given = (c.prn || []).filter(x => x.date === today).sort((a, b) => a.hm < b.hm ? -1 : 1);
+    for (const x of given) kb.push([{ text: `🕐 ${x.hm} ${x.name}`.slice(0, 50), callback_data: 'PT|' + x.id }, { text: '🗑', callback_data: 'PD|' + x.id }]);
+    return { text: '💊 <b>Al bisogno</b>\n' + (occ.length ? 'Tocca il farmaco che hai dato: segno l\'ora e chi l\'ha dato.' : 'Nessun farmaco al bisogno salvato: tocca ➕ Nuovo farmaco.') + (given.length ? '\n\nGià dati oggi: tocca 🕐 per correggere l\'ora, 🗑 per cancellare.' : ''), kb: { inline_keyboard: kb } };
   }
   async prnGive(acl, dataId, c, view, o, who) {
     const n = romeParts();
@@ -1612,7 +1614,7 @@ export class Store {
     const c = await this.chat(dataId);
     const [k, ...r] = data.split('|');
     const today = romeParts().date;
-    if (isMirror && !['T', 'S', 'Z', 'U', 'O', 'OR', 'TP', 'SA', 'OS', 'RQ', 'RT', 'RA', 'RS', 'RX', 'RW', 'RWo', 'LQ', 'LT', 'LW', 'LQX', 'SR', 'PB', 'PG', 'PW', 'PX', 'PR', 'PT'].includes(k)) return ans();
+    if (isMirror && !['T', 'S', 'Z', 'U', 'O', 'OR', 'TP', 'SA', 'OS', 'RQ', 'RT', 'RA', 'RS', 'RX', 'RW', 'RWo', 'LQ', 'LT', 'LW', 'LQX', 'SR', 'PB', 'PG', 'PW', 'PX', 'PR', 'PT', 'PD'].includes(k)) return ans();
 
     if (['T', 'S', 'Z', 'U', 'O'].includes(k)) {
       const [date, medId, time] = r;
@@ -1667,6 +1669,13 @@ export class Store {
         if (qm.ok) this.schedDel(acl, view, qm.result.message_id, 30), await this.saveAcl(acl);
       }
       return ans(answer);
+    }
+    if (k === 'PD') {
+      const view = isMirror ? realId : chatId;
+      c.prn = (c.prn || []).filter(x => x.id !== r[0]); await this.saveChat(dataId, c);
+      const v = this.prnPick(c); await this.edit(view, mid, v.text, v.kb);
+      await this.refreshPanels(acl, dataId, c); await this.refreshMainToday(acl, dataId, c);
+      return ans('Cancellato');
     }
     if (k === 'PT') {   // somministrazione registrata a un orario diverso da adesso
       const view = isMirror ? realId : chatId, e = (c.prn || []).find(x => x.id === r[0]); if (!e) return ans();
