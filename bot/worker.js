@@ -296,8 +296,8 @@ export class Store {
     const thread = this._thread && String(this._thread.chat) === String(chatId) ? { message_thread_id: this._thread.id } : home ? { message_thread_id: home } : {};
     const body = { chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true, ...thread, ...(markup ? { reply_markup: markup } : {}), ...extra };
     let r = await tg(this.env, 'sendMessage', body);
-    if (r && !r.ok && body.message_thread_id && /thread not found|topic/i.test(r.description || '')) {   // topic cancellato: torna in General
-      if (home === body.message_thread_id) { delete acl.home[String(chatId)]; await this.saveAcl(acl); }
+    if (r && !r.ok && body.message_thread_id && home === body.message_thread_id && /thread not found|topic/i.test(r.description || '')) {   // topic dei farmaci cancellato: torna in General
+      delete acl.home[String(chatId)]; await this.saveAcl(acl);
       delete body.message_thread_id; r = await tg(this.env, 'sendMessage', body);
     }
     const nid = r && !r.ok && r.parameters && r.parameters.migrate_to_chat_id;
@@ -1233,6 +1233,7 @@ export class Store {
       if (P.labs) await this.del(mc, P.labs);
       const r = await this.inThread(mc, th, () => this.send(mc, v.text, v.kb));
       if (r.ok) { P.labs = r.result.message_id; await this.saveAcl(acl); }
+      else if (/thread not found|topic/i.test(r.description || '')) { delete acl.labThread[mc]; delete P.labs; await this.saveAcl(acl); }   // topic Analisi eliminato: non lo usiamo più
     }
   }
   labPerson(c) { return c.persons.find(x => x.info && x.info.full) || c.persons[0] || { name: 'Mamma' }; }
