@@ -684,7 +684,7 @@ export class Store {
         const sc0 = await this.chat(src); const fl0 = sc0.flows[uid];
         if (fl0 && fl0.step === 'occ_name') return this.occName(src, sc0, uid, fl0, text, msg.message_id);
         if (fl0 && fl0.step === 'skip_reason') return this.skipReason(src, sc0, uid, fl0, text, msg.message_id, chatId);
-        if (fl0 && (fl0.step === 'prn_new' || fl0.step === 'prn_reason' || fl0.step === 'prn_time')) return this.flowInput(src, sc0, uid, fl0, text, msg.message_id);
+        if (fl0 && ['prn_new', 'prn_dose', 'prn_reason', 'prn_time'].includes(fl0.step)) return this.flowInput(src, sc0, uid, fl0, text, msg.message_id);
       }
       if (!cmd && text === ORARI_BTN) { await this.del(chatId, msg.message_id); return this.sendTemp(acl, chatId, studioTable(this.contact(await this.chat(acl.mirrors[chatId]))), 5); }
       if (cmd) await this.del(chatId, msg.message_id);   // pagina pulita: via i comandi scritti
@@ -948,12 +948,18 @@ export class Store {
       }
       case 'occ_name': return this.occName(chatId, c, uid, fl, text, mid);
       case 'skip_reason': return this.skipReason(chatId, c, uid, fl, text, mid, chatId);
-      case 'prn_new': {   // nuovo farmaco al bisogno: lo salvo e segno subito la somministrazione
+      case 'prn_new': {   // nuovo farmaco al bisogno: nome, poi dosaggio
         const nm = text.trim().slice(0, 60);
         c.occ = c.occ || [];
-        let o = c.occ.find(x => x.name.toLowerCase() === nm.toLowerCase());
-        if (!o) { o = { id: rid(), person: (c.persons[0] || {}).id, name: nm, dose: '' }; c.occ.push(o); }
-        delete c.flows[uid];
+        const o = c.occ.find(x => x.name.toLowerCase() === nm.toLowerCase());
+        if (o) { delete c.flows[uid]; return this.prnGive(await this.acl(), chatId, c, d.view, o, d.who); }   // c'era già
+        d.name = nm; fl.step = 'prn_dose'; await save();
+        return this.ask(d.view, `Dosaggio di <b>${esc(nm)}</b>? Ad esempio <i>2 mg</i>.\nOppure scrivi <b>salta</b>.`, mid, 'Es. 2 mg');
+      }
+      case 'prn_dose': {   // salvo il farmaco e segno subito la somministrazione
+        c.occ = c.occ || [];
+        const o = { id: rid(), person: (c.persons[0] || {}).id, name: d.name, dose: isSkip(text) ? '' : text.trim().slice(0, 40) };
+        c.occ.push(o); delete c.flows[uid];
         return this.prnGive(await this.acl(), chatId, c, d.view, o, d.who);
       }
       case 'prn_time': {
@@ -1688,7 +1694,7 @@ export class Store {
       if (k === 'PB') { const v = this.prnPick(c); await this.screen(view, 'prn', v.text, v.kb); return ans(); }
       if (k === 'PW') {
         c.flows[uid] = { step: 'prn_new', d: { view, who } }; await this.saveChat(dataId, c); await this.del(view, mid);
-        await this.ask(view, 'Quale farmaco al bisogno hai dato? Lo salvo per le prossime volte.', null, 'Es. Tachipirina 1000 mg'); return ans();
+        await this.ask(view, 'Quale farmaco al bisogno hai dato? Scrivi solo il nome, il dosaggio te lo chiedo dopo. Lo salvo per le prossime volte.', null, 'Es. Tachipirina'); return ans();
       }
       if (k === 'PG') {
         const o = (c.occ || []).find(x => x.id === r[0]); if (!o) return ans('Farmaco non trovato');
