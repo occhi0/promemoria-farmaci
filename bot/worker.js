@@ -210,11 +210,11 @@ const COMMANDS = [   // ordinati per uso: giorno per giorno, farmaci, controlli,
 ];
 
 const MIRROR_COMMANDS = [   // menu del gruppo semplice: solo cose da guardare
-  { command: 'oggi', description: '📅 Pannello di oggi' },
-  { command: 'terapia', description: '🩺 Terapia in corso' },
-  { command: 'ricette', description: '📤 Richiedi ricette' },
+  { command: 'terapia', description: '🩺 Terapia in corso, anche da inviare su WhatsApp' },
+  { command: 'ricette', description: '📤 Richiedi le ricette al medico' },
   { command: 'orari', description: '🕐 Orari dello studio medico' },
-  { command: 'pulisci', description: '🧹 Cancella i messaggi vecchi' }
+  { command: 'pulisci', description: '🧹 Cancella i messaggi vecchi' },
+  { command: 'oggi', description: '📅 Rimetti il pannello di oggi, se è sparito' }
 ];
 
 export default {
@@ -426,7 +426,7 @@ export class Store {
     await tg(this.env, 'setMyCommands', { commands: COMMANDS, scope: { type: 'all_private_chats' } });
     for (const id of Object.keys(acl.chats)) if (id.startsWith('-')) await tg(this.env, 'setMyCommands', { commands: COMMANDS, scope: { type: 'chat', chat_id: Number(id) } });
     for (const id of Object.keys(acl.mirrors || {})) await tg(this.env, 'setMyCommands', { commands: MIRROR_COMMANDS, scope: { type: 'chat', chat_id: Number(id) } });
-    acl.cmdv = 12; await this.saveAcl(acl);
+    acl.cmdv = 13; await this.saveAcl(acl);
   }
   // Pulsante fisso in basso (tastiera del bot). Senza "/" funziona solo se la privacy del bot nei gruppi è disattivata.
   async setBottomKb(acl, mc, force) {
@@ -499,7 +499,7 @@ export class Store {
   async tick(nowTs) {
     const n = romeParts(nowTs);
     const acl = await this.acl();
-    if (acl.admin && acl.cmdv !== 12) await this.syncCommands(acl);
+    if (acl.admin && acl.cmdv !== 13) await this.syncCommands(acl);
     if ((acl.wakes || []).some(w => w.at <= nowTs)) {
       for (const w of acl.wakes.filter(w => w.at <= nowTs)) {
         const txt = `🟢 <b>Lo studio è aperto</b> (fino alle ${w.until}).\nEcco la richiesta ${w.kind === 'lab' ? 'analisi' : 'ricette'} preparata${w.who ? ' da ' + esc(w.who) : ''}:\n\n${w.names.map(n => '• ' + esc(n)).join('\n')}\n\n👉 Tocca il pulsante qui sotto per inviarla${w.to ? ' a ' + esc(w.to) : ''} su WhatsApp.`;
