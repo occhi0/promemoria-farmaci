@@ -209,6 +209,13 @@ const COMMANDS = [   // ordinati per uso: giorno per giorno, farmaci, controlli,
   { command: 'trasferisci', description: '↪️ Sposta farmaci da un gruppo a un altro' }
 ];
 
+const MIRROR_COMMANDS = [   // menu del gruppo semplice: solo cose da guardare
+  { command: 'oggi', description: '📅 Pannello di oggi' },
+  { command: 'terapia', description: '🩺 Terapia in corso' },
+  { command: 'orari', description: '🕐 Orari dello studio medico' },
+  { command: 'pulisci', description: '🧹 Cancella i messaggi vecchi' }
+];
+
 export default {
   async fetch(req, env) {
     const url = new URL(req.url);
@@ -417,8 +424,8 @@ export class Store {
     await tg(this.env, 'deleteMyCommands', {});
     await tg(this.env, 'setMyCommands', { commands: COMMANDS, scope: { type: 'all_private_chats' } });
     for (const id of Object.keys(acl.chats)) if (id.startsWith('-')) await tg(this.env, 'setMyCommands', { commands: COMMANDS, scope: { type: 'chat', chat_id: Number(id) } });
-    for (const id of Object.keys(acl.mirrors || {})) await tg(this.env, 'deleteMyCommands', { scope: { type: 'chat', chat_id: Number(id) } });
-    acl.cmdv = 10; await this.saveAcl(acl);
+    for (const id of Object.keys(acl.mirrors || {})) await tg(this.env, 'setMyCommands', { commands: MIRROR_COMMANDS, scope: { type: 'chat', chat_id: Number(id) } });
+    acl.cmdv = 11; await this.saveAcl(acl);
   }
   // Pulsante fisso in basso (tastiera del bot). Senza "/" funziona solo se la privacy del bot nei gruppi è disattivata.
   async setBottomKb(acl, mc, force) {
@@ -491,7 +498,7 @@ export class Store {
   async tick(nowTs) {
     const n = romeParts(nowTs);
     const acl = await this.acl();
-    if (acl.admin && acl.cmdv !== 10) await this.syncCommands(acl);
+    if (acl.admin && acl.cmdv !== 11) await this.syncCommands(acl);
     if ((acl.wakes || []).some(w => w.at <= nowTs)) {
       for (const w of acl.wakes.filter(w => w.at <= nowTs)) {
         const txt = `🟢 <b>Lo studio è aperto</b> (fino alle ${w.until}).\nEcco la richiesta ${w.kind === 'lab' ? 'analisi' : 'ricette'} preparata${w.who ? ' da ' + esc(w.who) : ''}:\n\n${w.names.map(n => '• ' + esc(n)).join('\n')}\n\n👉 Tocca il pulsante qui sotto per inviarla${w.to ? ' a ' + esc(w.to) : ''} su WhatsApp.`;
@@ -702,7 +709,7 @@ export class Store {
         acl.mcv = acl.mcv || {}; acl.mcv[chatId] = 4; await this.saveAcl(acl);
         const rk = await this.send(chatId, '…', { remove_keyboard: true });   // toglie i vecchi pulsanti fissi
         if (rk.ok) await this.del(chatId, rk.result.message_id);
-        await tg(this.env, 'deleteMyCommands', { scope: { type: 'chat', chat_id: Number(chatId) } });
+        await tg(this.env, 'setMyCommands', { commands: MIRROR_COMMANDS, scope: { type: 'chat', chat_id: Number(chatId) } });
       }
       if (cmd === '/oggi') { const sc = await this.chat(src); await this.updatePanel(acl, chatId, sc, true); return this.updateOrders(acl, chatId, sc); }
       if (cmd === '/terapia') return this.mirrorTherapy(acl, chatId, await this.chat(src), acl.chats[src], true);
@@ -1602,7 +1609,7 @@ export class Store {
       acl.mirrors = acl.mirrors || {}; acl.mirrors[chatId] = src; delete acl.chats[chatId];
       await this.saveAcl(acl);
       acl.mcv = acl.mcv || {}; acl.mcv[chatId] = 4; await this.saveAcl(acl);
-      await tg(this.env, 'deleteMyCommands', { scope: { type: 'chat', chat_id: Number(chatId) } });
+      await tg(this.env, 'setMyCommands', { commands: MIRROR_COMMANDS, scope: { type: 'chat', chat_id: Number(chatId) } });
       await this.del(chatId, mid);
       const sc = await this.chat(src);
       await this.mirrorTherapy(acl, chatId, sc, acl.chats[src]);
