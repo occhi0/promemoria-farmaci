@@ -192,21 +192,21 @@ All'orario di ogni dose ti mando un messaggio con i pulsanti ✅ Preso, ⏰ ${SN
 
 Puoi gestire anche i farmaci dei familiari: quando aggiungi un farmaco scegli per chi è. Per condividerli (ad esempio con le sorelle per i farmaci della mamma) crea un gruppo Telegram, aggiungimi e scrivi lì /start: nel gruppo potranno usarmi tutti.`;
 
-const COMMANDS = [
-  { command: 'oggi', description: 'Dosi di oggi' },
-  { command: 'aggiungi', description: 'Aggiungi un farmaco' },
-  { command: 'farmaci', description: 'Elenco e modifica dei farmaci' },
-  { command: 'scorte', description: 'Compresse rimaste' },
-  { command: 'storico', description: 'Storico delle terapie a tempo' },
-  { command: 'terapia', description: 'Elenco della terapia per il medico' },
-  { command: 'esporta', description: 'Copia di sicurezza completa' },
-  { command: 'trasferisci', description: 'Sposta farmaci nel gruppo' },
-  { command: 'saltate', description: 'Dosi saltate e motivo' },
-  { command: 'bisogno', description: 'Farmaci al bisogno dati' },
-  { command: 'analisi', description: 'Elenco delle analisi del sangue' },
-  { command: 'pulisci', description: 'Cancella i messaggi vecchi del gruppo' },
-  { command: 'annulla', description: "Interrompi l'operazione in corso" },
-  { command: 'aiuto', description: 'Come funziona' }
+const COMMANDS = [   // ordinati per uso: giorno per giorno, farmaci, controlli, analisi, servizio
+  { command: 'oggi', description: '📅 Dosi di oggi' },
+  { command: 'terapia', description: '🩺 Terapia in corso, da mostrare al medico' },
+  { command: 'scorte', description: '📦 Compresse rimaste e ricette' },
+  { command: 'farmaci', description: '💊 Elenco farmaci: modifica, pausa, archivio' },
+  { command: 'aggiungi', description: '➕ Nuovo farmaco (anche al bisogno)' },
+  { command: 'storico', description: '🗂 Terapie a tempo, in corso e concluse' },
+  { command: 'saltate', description: '⏭ Dosi saltate e motivo' },
+  { command: 'bisogno', description: '💊 Farmaci al bisogno dati' },
+  { command: 'analisi', description: '🩸 Analisi del sangue' },
+  { command: 'pulisci', description: '🧹 Cancella i messaggi vecchi' },
+  { command: 'annulla', description: "✖️ Interrompi l'operazione in corso" },
+  { command: 'aiuto', description: '❓ Come funziona' },
+  { command: 'esporta', description: '💾 Copia di sicurezza completa' },
+  { command: 'trasferisci', description: '↪️ Sposta farmaci da un gruppo a un altro' }
 ];
 
 export default {
@@ -418,7 +418,7 @@ export class Store {
     await tg(this.env, 'setMyCommands', { commands: COMMANDS, scope: { type: 'all_private_chats' } });
     for (const id of Object.keys(acl.chats)) if (id.startsWith('-')) await tg(this.env, 'setMyCommands', { commands: COMMANDS, scope: { type: 'chat', chat_id: Number(id) } });
     for (const id of Object.keys(acl.mirrors || {})) await tg(this.env, 'deleteMyCommands', { scope: { type: 'chat', chat_id: Number(id) } });
-    acl.cmdv = 9; await this.saveAcl(acl);
+    acl.cmdv = 10; await this.saveAcl(acl);
   }
   // Pulsante fisso in basso (tastiera del bot). Senza "/" funziona solo se la privacy del bot nei gruppi è disattivata.
   async setBottomKb(acl, mc, force) {
@@ -491,7 +491,7 @@ export class Store {
   async tick(nowTs) {
     const n = romeParts(nowTs);
     const acl = await this.acl();
-    if (acl.admin && acl.cmdv !== 9) await this.syncCommands(acl);
+    if (acl.admin && acl.cmdv !== 10) await this.syncCommands(acl);
     if ((acl.wakes || []).some(w => w.at <= nowTs)) {
       for (const w of acl.wakes.filter(w => w.at <= nowTs)) {
         const txt = `🟢 <b>Lo studio è aperto</b> (fino alle ${w.until}).\nEcco la richiesta ${w.kind === 'lab' ? 'analisi' : 'ricette'} preparata${w.who ? ' da ' + esc(w.who) : ''}:\n\n${w.names.map(n => '• ' + esc(n)).join('\n')}\n\n👉 Tocca il pulsante qui sotto per inviarla${w.to ? ' a ' + esc(w.to) : ''} su WhatsApp.`;
