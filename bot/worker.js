@@ -981,13 +981,28 @@ export class Store {
         c.occ.push(o); delete c.flows[uid];
         return this.prnGive(await this.acl(), chatId, c, d.view, o, d.who);
       }
-      case 'prn_time': {
-        const t = parseTimes(text);
-        if (!t) return this.ask(d.view, 'Non ho capito l\'ora 🤔 Scrivila così: <code>14:30</code>', mid, 'Es. 14:30');
-        const e = (c.prn || []).find(x => x.id === d.id); if (e) e.hm = t[0];
+      case 'prn_time': {   // "14:30", "ieri 21:00", "4/11 21:00", "4/11/2026 21:00"
+        const today = romeParts().date;
+        let txt = text.trim().toLowerCase(), date = today;
+        if (/^ieri\b/.test(txt)) { date = addDays(today, -1).date; txt = txt.replace(/^ieri\b/, ''); }
+        else if (/^l'altro ieri\b|^altroieri\b/.test(txt)) { date = addDays(today, -2).date; txt = txt.replace(/^(l'altro ieri|altroieri)\b/, ''); }
+        else if (/^oggi\b/.test(txt)) txt = txt.replace(/^oggi\b/, '');
+        else {
+          const dm = txt.match(/^(\d{1,2})[\/.-](\d{1,2})(?:[\/.-](\d{2,4}))?\s+/);
+          if (dm) {
+            const y = dm[3] ? (dm[3].length === 2 ? 2000 + +dm[3] : +dm[3]) : +today.slice(0, 4);
+            date = `${y}-${String(dm[2]).padStart(2, '0')}-${String(dm[1]).padStart(2, '0')}`;
+            if (date > today) date = `${y - 1}${date.slice(4)}`;   // es. a gennaio "30/12" = dicembre scorso
+            txt = txt.slice(dm[0].length);
+          }
+        }
+        const t = parseTimes(txt.trim());
+        const okDate = /^\d{4}-\d{2}-\d{2}$/.test(date) && !isNaN(Date.parse(date)) && date >= addDays(today, -89).date;
+        if (!t || !okDate || (date === today && toMin(t[0]) > romeParts().min + 5)) return this.ask(d.view, 'Non ho capito 🤔 Scrivi ad esempio <code>14:30</code>, <code>ieri 21:00</code> oppure <code>4/11 21:00</code> (non nel futuro).', mid, 'Es. ieri 21:00');
+        const e = (c.prn || []).find(x => x.id === d.id); if (e) { e.hm = t[0]; e.date = date; }
         delete c.flows[uid]; await save();
         const a = await this.acl(); await this.refreshPanels(a, chatId, c); await this.refreshMainToday(a, chatId, c);
-        return this.sendTemp(a, d.view, `🕐 Ora corretta: <b>${esc(e ? e.name : '')}</b> alle ${t[0]}.`, 1);
+        return this.sendTemp(a, d.view, `🕐 Corretto: <b>${esc(e ? e.name : '')}</b> ${date === today ? 'oggi' : fmtDate(date)} alle ${t[0]}.`, 1);
       }
       case 'prn_reason': {
         const e = (c.prn || []).find(x => x.id === d.id); if (e) e.r = text.trim().slice(0, 60);
@@ -1278,7 +1293,7 @@ export class Store {
     await this.refreshPanels(acl, dataId, c); await this.refreshMainToday(acl, dataId, c);
     const R = [['🤕 Dolore', 'd'], ['🌡 Febbre', 'f'], ['😖 Prurito', 'p'], ['😟 Agitazione', 'a'], ['🤢 Nausea', 'n'], ['✏️ Altro', 'o']];
     const base = 'PR|' + e.id + '|';
-    const qk = { inline_keyboard: [R.slice(0, 3).map(([t, x]) => ({ text: t, callback_data: base + x })), R.slice(3).map(([t, x]) => ({ text: t, callback_data: base + x })), [{ text: 'Nessun motivo', callback_data: base + '-' }], [{ text: '🕐 Dato a un\'altra ora', callback_data: 'PT|' + e.id }]] };
+    const qk = { inline_keyboard: [R.slice(0, 3).map(([t, x]) => ({ text: t, callback_data: base + x })), R.slice(3).map(([t, x]) => ({ text: t, callback_data: base + x })), [{ text: 'Nessun motivo', callback_data: base + '-' }], [{ text: '🕐 Dato a un\'altra ora o giorno', callback_data: 'PT|' + e.id }]] };
     const qm = await this.send(view, `💊 Segnato: <b>${esc(e.name)}</b> alle ${e.hm}${who ? ' · ' + esc(who) : ''}.\nPer cosa?`, qk);
     if (qm.ok) { this.schedDel(acl, view, qm.result.message_id, 30); await this.saveAcl(acl); }
   }
@@ -1705,7 +1720,7 @@ export class Store {
     if (k === 'PT') {   // somministrazione registrata a un orario diverso da adesso
       const view = isMirror ? realId : chatId, e = (c.prn || []).find(x => x.id === r[0]); if (!e) return ans();
       c.flows[uid] = { step: 'prn_time', d: { id: e.id, view } }; await this.saveChat(dataId, c);
-      await this.ask(view, `A che ora hai dato <b>${esc(e.name)}</b>? Ad esempio <code>14:30</code>.`, null, 'Es. 14:30'); return ans();
+      await this.ask(view, `Quando hai dato <b>${esc(e.name)}</b>?\nSe era oggi scrivi solo l'ora, ad esempio <code>14:30</code>.\nSe era un altro giorno: <code>ieri 21:00</code> oppure <code>4/11 21:00</code>.`, null, 'Es. ieri 21:00'); return ans();
     }
     if (['PB', 'PG', 'PW', 'PX', 'PR'].includes(k)) {
       const view = isMirror ? realId : chatId;
