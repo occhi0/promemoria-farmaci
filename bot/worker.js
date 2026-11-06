@@ -212,6 +212,7 @@ const COMMANDS = [   // ordinati per uso: giorno per giorno, farmaci, controlli,
 const MIRROR_COMMANDS = [   // menu del gruppo semplice: solo cose da guardare
   { command: 'oggi', description: '📅 Pannello di oggi' },
   { command: 'terapia', description: '🩺 Terapia in corso' },
+  { command: 'ricette', description: '📤 Richiedi ricette' },
   { command: 'orari', description: '🕐 Orari dello studio medico' },
   { command: 'pulisci', description: '🧹 Cancella i messaggi vecchi' }
 ];
@@ -425,7 +426,7 @@ export class Store {
     await tg(this.env, 'setMyCommands', { commands: COMMANDS, scope: { type: 'all_private_chats' } });
     for (const id of Object.keys(acl.chats)) if (id.startsWith('-')) await tg(this.env, 'setMyCommands', { commands: COMMANDS, scope: { type: 'chat', chat_id: Number(id) } });
     for (const id of Object.keys(acl.mirrors || {})) await tg(this.env, 'setMyCommands', { commands: MIRROR_COMMANDS, scope: { type: 'chat', chat_id: Number(id) } });
-    acl.cmdv = 11; await this.saveAcl(acl);
+    acl.cmdv = 12; await this.saveAcl(acl);
   }
   // Pulsante fisso in basso (tastiera del bot). Senza "/" funziona solo se la privacy del bot nei gruppi è disattivata.
   async setBottomKb(acl, mc, force) {
@@ -498,7 +499,7 @@ export class Store {
   async tick(nowTs) {
     const n = romeParts(nowTs);
     const acl = await this.acl();
-    if (acl.admin && acl.cmdv !== 11) await this.syncCommands(acl);
+    if (acl.admin && acl.cmdv !== 12) await this.syncCommands(acl);
     if ((acl.wakes || []).some(w => w.at <= nowTs)) {
       for (const w of acl.wakes.filter(w => w.at <= nowTs)) {
         const txt = `🟢 <b>Lo studio è aperto</b> (fino alle ${w.until}).\nEcco la richiesta ${w.kind === 'lab' ? 'analisi' : 'ricette'} preparata${w.who ? ' da ' + esc(w.who) : ''}:\n\n${w.names.map(n => '• ' + esc(n)).join('\n')}\n\n👉 Tocca il pulsante qui sotto per inviarla${w.to ? ' a ' + esc(w.to) : ''} su WhatsApp.`;
@@ -728,6 +729,7 @@ export class Store {
         return this.refreshLabs(acl, src, await this.chat(src), true);
       }
       if (cmd === '/orari') return this.sendTemp(acl, chatId, studioTable(this.contact(await this.chat(src))), 5);
+      if (cmd === '/ricette') return this.onCallback({ id: '', from: msg.from, data: 'RQ', message: { message_id: 0, chat: msg.chat } });   // come il pulsante 📤 Ricette
       if (cmd === '/pulisci') {
         const sc = await this.chat(src); const P = (acl.panels || {})[chatId] || {};
         const pr = await this.purge(chatId, msg.message_id, sc, [P.oggi, P.orders]);   // la Terapia si cancella: si riapre col pulsante 🩺
@@ -1357,7 +1359,7 @@ export class Store {
   todayView(c, panel) {
     const n = romeParts();
     const PRN = [{ text: '💊 Al bisogno', callback_data: 'PB' }];
-    const pkb = panel ? { inline_keyboard: [[{ text: '🔄', callback_data: 'OR' }, { text: '🩺 Terapia', callback_data: 'TP' }, { text: '📤 Ricette', callback_data: 'RQ' }], PRN] } : { inline_keyboard: [PRN] };
+    const pkb = panel ? { inline_keyboard: [[{ text: '🔄 Aggiorna', callback_data: 'OR' }, PRN[0]]] } : { inline_keyboard: [PRN] };
     const prnTxt = this.prnToday(c, n.date);
     if (!c.meds.length) return { text: 'Non ci sono ancora farmaci. Usa /aggiungi per inserirne uno.' + prnTxt, kb: pkb };
     const ds = this.dosesOn(c, n.date, n.dow);
@@ -1373,8 +1375,8 @@ export class Store {
       return `${ic} ${d.time}  ${this.multi(c) ? '<b>' + esc(this.person(c, d.m.person)) + '</b> · ' : ''}${esc(d.m.name)}${d.m.dose ? ' ' + esc(d.m.dose) : ''}${panel && e && e.by ? ' · <i>' + esc(e.by) + '</i>' : ''}`;
     });
     const text = `📅 <b>Oggi, ${fmtDate(n.date)}</b>\n${taken} di ${ds.length} dosi prese\n\n${lines.join('\n')}${prnTxt}${kb.length ? '\n\nTocca per segnare come prese:' : ''}`;
-    kb.push(panel ? [{ text: '🔄', callback_data: 'OR' }, { text: '🩺 Terapia', callback_data: 'TP' }, { text: '📤 Ricette', callback_data: 'RQ' }] : [{ text: '🔄 Aggiorna', callback_data: 'OR' }]);
-    kb.push(PRN);
+    if (panel) kb.push([{ text: '🔄 Aggiorna', callback_data: 'OR' }, PRN[0]]);
+    else kb.push([{ text: '🔄 Aggiorna', callback_data: 'OR' }], PRN);
     return { text: panel ? text + `\n\n<i>Quando arriva un promemoria tocca ✅ Preso (⏰ per rimandare, ⏭ per saltare). Aggiornato alle ${n.hm}.</i>` : text, kb: { inline_keyboard: kb } };
   }
   medsView(c) {
