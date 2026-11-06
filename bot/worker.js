@@ -1167,7 +1167,7 @@ export class Store {
         if (m.notes) t += ` (${esc(m.notes)})`;
       }
       const occ = (c.occ || []).filter(o => o.person === pid);
-      if (occ.length) t += `\n\n<b>Al bisogno</b>` + occ.map(o => `\n• <b>${esc(o.name)}</b>`).join('');
+      if (occ.length) t += `\n\n<b>Al bisogno</b>` + occ.map(o => `\n• <b>${esc(o.name)}</b>${o.dose ? ' ' + esc(o.dose) : ''}`).join('');
       t += '\n';
     }
     return t;
@@ -1230,7 +1230,7 @@ export class Store {
   }
   prnPick(c) {
     const occ = c.occ || [];
-    const kb = occ.map(o => [{ text: `💊 ${o.name}`.slice(0, 60), callback_data: 'PG|' + o.id }]);
+    const kb = occ.map(o => [{ text: `💊 ${o.name}${o.dose ? ' ' + o.dose : ''}`.slice(0, 60), callback_data: 'PG|' + o.id }]);
     kb.push([{ text: '➕ Nuovo farmaco', callback_data: 'PW' }, { text: 'Chiudi', callback_data: 'PX' }]);
     return { text: '💊 <b>Al bisogno</b>\n' + (occ.length ? 'Tocca il farmaco che hai dato: segno l\'ora e chi l\'ha dato.' : 'Nessun farmaco al bisogno salvato: tocca ➕ Nuovo farmaco.'), kb: { inline_keyboard: kb } };
   }
