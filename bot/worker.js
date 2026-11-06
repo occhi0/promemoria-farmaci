@@ -684,7 +684,7 @@ export class Store {
         const sc0 = await this.chat(src); const fl0 = sc0.flows[uid];
         if (fl0 && fl0.step === 'occ_name') return this.occName(src, sc0, uid, fl0, text, msg.message_id);
         if (fl0 && fl0.step === 'skip_reason') return this.skipReason(src, sc0, uid, fl0, text, msg.message_id, chatId);
-        if (fl0 && (fl0.step === 'prn_new' || fl0.step === 'prn_reason')) return this.flowInput(src, sc0, uid, fl0, text, msg.message_id);
+        if (fl0 && (fl0.step === 'prn_new' || fl0.step === 'prn_reason' || fl0.step === 'prn_time')) return this.flowInput(src, sc0, uid, fl0, text, msg.message_id);
       }
       if (!cmd && text === ORARI_BTN) { await this.del(chatId, msg.message_id); return this.sendTemp(acl, chatId, studioTable(this.contact(await this.chat(acl.mirrors[chatId]))), 5); }
       if (cmd) await this.del(chatId, msg.message_id);   // pagina pulita: via i comandi scritti
@@ -956,6 +956,14 @@ export class Store {
         delete c.flows[uid];
         return this.prnGive(await this.acl(), chatId, c, d.view, o, d.who);
       }
+      case 'prn_time': {
+        const t = parseTimes(text);
+        if (!t) return this.ask(d.view, 'Non ho capito l\'ora 🤔 Scrivila così: <code>14:30</code>', mid, 'Es. 14:30');
+        const e = (c.prn || []).find(x => x.id === d.id); if (e) e.hm = t[0];
+        delete c.flows[uid]; await save();
+        const a = await this.acl(); await this.refreshPanels(a, chatId, c); await this.refreshMainToday(a, chatId, c);
+        return this.sendTemp(a, d.view, `🕐 Ora corretta: <b>${esc(e ? e.name : '')}</b> alle ${t[0]}.`, 1);
+      }
       case 'prn_reason': {
         const e = (c.prn || []).find(x => x.id === d.id); if (e) e.r = text.trim().slice(0, 60);
         delete c.flows[uid]; await save();
@@ -1226,6 +1234,7 @@ export class Store {
   // ── farmaci al bisogno: somministrazioni (c.prn = [{id, med, name, t, date, hm, by, r}]) ──
   prnToday(c, date) {
     const L = (c.prn || []).filter(x => x.date === date);
+    L.sort((a, b) => a.hm < b.hm ? -1 : 1);
     return L.length ? '\n\n<b>Al bisogno</b>\n' + L.map(x => `💊 ${x.hm}  ${esc(x.name)}${x.r ? ' (' + esc(x.r) + ')' : ''}${x.by ? ' · <i>' + esc(x.by) + '</i>' : ''}`).join('\n') : '';
   }
   prnPick(c) {
@@ -1242,7 +1251,7 @@ export class Store {
     await this.refreshPanels(acl, dataId, c); await this.refreshMainToday(acl, dataId, c);
     const R = [['🤕 Dolore', 'd'], ['🌡 Febbre', 'f'], ['😖 Prurito', 'p'], ['😟 Agitazione', 'a'], ['🤢 Nausea', 'n'], ['✏️ Altro', 'o']];
     const base = 'PR|' + e.id + '|';
-    const qk = { inline_keyboard: [R.slice(0, 3).map(([t, x]) => ({ text: t, callback_data: base + x })), R.slice(3).map(([t, x]) => ({ text: t, callback_data: base + x })), [{ text: 'Nessun motivo', callback_data: base + '-' }]] };
+    const qk = { inline_keyboard: [R.slice(0, 3).map(([t, x]) => ({ text: t, callback_data: base + x })), R.slice(3).map(([t, x]) => ({ text: t, callback_data: base + x })), [{ text: 'Nessun motivo', callback_data: base + '-' }], [{ text: '🕐 Dato a un\'altra ora', callback_data: 'PT|' + e.id }]] };
     const qm = await this.send(view, `💊 Segnato: <b>${esc(e.name)}</b> alle ${e.hm}${who ? ' · ' + esc(who) : ''}.\nPer cosa?`, qk);
     if (qm.ok) { this.schedDel(acl, view, qm.result.message_id, 30); await this.saveAcl(acl); }
   }
@@ -1255,7 +1264,7 @@ export class Store {
     for (const x of (c.prn || [])) (by[x.date] = by[x.date] || []).push(x);
     const days = Object.keys(by).sort().reverse();
     if (!days.length) return '💊 <b>Al bisogno</b> (ultimi 90 giorni)\n\n<i>Nessuna somministrazione segnata.</i>';
-    return '💊 <b>Al bisogno</b> (ultimi 90 giorni)\n' + days.map(d => `\n<b>${fmtDate(d)}</b>\n` + by[d].sort((a, b) => a.t - b.t).map(x => `• ${x.hm} ${esc(x.name)}${x.r ? ' — <i>' + esc(x.r) + '</i>' : ''}${x.by ? ' · ' + esc(x.by) : ''}`).join('\n')).join('\n');
+    return '💊 <b>Al bisogno</b> (ultimi 90 giorni)\n' + days.map(d => `\n<b>${fmtDate(d)}</b>\n` + by[d].sort((a, b) => a.hm < b.hm ? -1 : 1).map(x => `• ${x.hm} ${esc(x.name)}${x.r ? ' — <i>' + esc(x.r) + '</i>' : ''}${x.by ? ' · ' + esc(x.by) : ''}`).join('\n')).join('\n');
   }
   // motivo di una dose saltata (scritto a mano)
   async skipReason(dataId, c, uid, fl, text, mid, view) {
@@ -1603,7 +1612,7 @@ export class Store {
     const c = await this.chat(dataId);
     const [k, ...r] = data.split('|');
     const today = romeParts().date;
-    if (isMirror && !['T', 'S', 'Z', 'U', 'O', 'OR', 'TP', 'SA', 'OS', 'RQ', 'RT', 'RA', 'RS', 'RX', 'RW', 'RWo', 'LQ', 'LT', 'LW', 'LQX', 'SR', 'PB', 'PG', 'PW', 'PX', 'PR'].includes(k)) return ans();
+    if (isMirror && !['T', 'S', 'Z', 'U', 'O', 'OR', 'TP', 'SA', 'OS', 'RQ', 'RT', 'RA', 'RS', 'RX', 'RW', 'RWo', 'LQ', 'LT', 'LW', 'LQX', 'SR', 'PB', 'PG', 'PW', 'PX', 'PR', 'PT'].includes(k)) return ans();
 
     if (['T', 'S', 'Z', 'U', 'O'].includes(k)) {
       const [date, medId, time] = r;
@@ -1658,6 +1667,11 @@ export class Store {
         if (qm.ok) this.schedDel(acl, view, qm.result.message_id, 30), await this.saveAcl(acl);
       }
       return ans(answer);
+    }
+    if (k === 'PT') {   // somministrazione registrata a un orario diverso da adesso
+      const view = isMirror ? realId : chatId, e = (c.prn || []).find(x => x.id === r[0]); if (!e) return ans();
+      c.flows[uid] = { step: 'prn_time', d: { id: e.id, view } }; await this.saveChat(dataId, c);
+      await this.ask(view, `A che ora hai dato <b>${esc(e.name)}</b>? Ad esempio <code>14:30</code>.`, null, 'Es. 14:30'); return ans();
     }
     if (['PB', 'PG', 'PW', 'PX', 'PR'].includes(k)) {
       const view = isMirror ? realId : chatId;
