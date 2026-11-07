@@ -412,7 +412,6 @@ export class Store {
     const howLong = m.stock === 0 ? '<b>sono finite</b>' : `bastano per ${days < 1 ? 'meno di un giorno' : 'circa ' + days + (days === 1 ? ' giorno' : ' giorni')}${days >= 1 ? ` (fino a ${fmtDate(until)})` : ''}`;
     const text = `${level === LAST_STOCK_DAYS ? '⚠️ <b>Ultimo avviso scorte</b>' : '📦 <b>Scorte in esaurimento</b>'}\n<b>${esc(m.name)}</b>${m.dose ? ' ' + esc(m.dose) : ''}${this.pp(c, m.person)}: restano ${un(m, m.stock)}, ${howLong}.\n${rxOf(m) === 'banco' ? '🛒 Da comprare in farmacia, senza ricetta.' : rxOf(m) === 'bianca' ? 'Ricordati la ricetta bianca e la farmacia.' : 'Ricordati ricetta e farmacia.'} Quando lo ricomprate, toccate qui sotto.`;
     const kb = this.packKb(m);
-    if (rxOf(m) === 'banco') kb.inline_keyboard.unshift([{ text: '🛒 Manda alla farmacia', url: 'https://wa.me/?text=' + encodeURIComponent(this.waShop(c, [m])) }]);
     return { text, kb };
   }
   unlog(c, date, key, m) {
@@ -1518,7 +1517,6 @@ export class Store {
     if (shop.length) t += `\n\n🛒 <b>Da comprare in farmacia</b> (senza ricetta): ${shop.map(m => esc(m.name)).join(', ')}`;
     const pids = [...new Set(rxLow.map(m => m.person))];
     let missing = false;
-    if (shop.length) kb.push([{ text: '🛒 Manda la lista della farmacia', url: 'https://wa.me/?text=' + encodeURIComponent(this.waShop(c, shop)) }]);
     for (const pid of pids) {
       const p = c.persons.find(x => x.id === pid) || { name: '—' };
       const info = p.info || {};
@@ -1537,7 +1535,7 @@ export class Store {
       t += `\n\n${sl}`;
       t += studioOpen() ? `\n👉 Tocca <b>Invia richiesta</b> per mandare la richiesta delle ricette su WhatsApp.` : `\n👉 Tocca <b>Ricordamelo all'apertura</b>: quando lo studio apre ti arriva la richiesta pronta da inviare (oppure <b>Invia comunque</b>).`;
     }
-    if (shop.length) t += `\n👉 Per i farmaci 🛒 tocca <b>Manda la lista della farmacia</b> e scegli a chi mandarla.`;
+    if (shop.length) t += `\n👉 I farmaci 🛒 si comprano direttamente in farmacia, senza ricetta.`;
     if (low.some(m => m.pack)) t += `\n👉 Quando un farmaco è stato ritirato in farmacia, tocca il suo pulsante <b>☑️</b> qui sotto (2 confezioni, oppure "1 conf."): la scorta si aggiorna e il farmaco esce dalla lista.`;
     if (noPack.length) t += `\n\n<i>Per avere il pulsante ☑️ anche per ${noPack.map(m => esc(m.name)).join(', ')}, nel gruppo principale imposta quante unità ci sono in una confezione (/scorte → farmaco → ⚙️).</i>`;
     if (missing) t += `\n\n<i>Mancano i dati dell'assistita: impostali nel gruppo principale da /scorte → Richiedi ricette.</i>`;
