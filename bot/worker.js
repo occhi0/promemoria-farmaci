@@ -1239,7 +1239,7 @@ export class Store {
         if (m.notes) t += ` (${esc(m.notes)})`;
       }
       const occ = (c.occ || []).filter(o => o.person === pid);
-      if (occ.length) t += `\n\n<b>Al bisogno</b>` + occ.map(o => `\n• <b>${esc(o.name)}</b>${o.dose ? ' ' + esc(o.dose) : ''}`).join('');
+      if (occ.length) t += `\n\n<b>Al bisogno</b>` + occ.map(o => `\n• <b>${esc(o.name)}</b>${o.dose ? ' ' + esc(o.dose) : ''}${o.unit ? ' (' + unitOf(o)[1] + ')' : ''}`).join('');
       t += '\n';
     }
     return t;
@@ -1575,7 +1575,7 @@ export class Store {
       .sort((a, b) => (left(a) ?? Infinity) - (left(b) ?? Infinity) || a.name.localeCompare(b.name, 'it', { sensitivity: 'base' }));
     const seen = new Set(); const uniq = ms.filter(m => { const k = (m.name + '|' + m.dose).toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
     const info = p.info || {};
-    const occ = (c.occ || []).filter(o => o.person === rq.pid);
+    const occ = (c.occ || []).filter(o => o.person === rq.pid && rxOf(o) !== 'banco');
     const extra = rq.extra || [];
     const chosen = [...uniq, ...occ, ...extra].filter(m => rq.sel.includes(m.id));
     const wa = this.waRequest(p, chosen, who);
@@ -2012,9 +2012,24 @@ export class Store {
     if (k === 'OL' || k === 'OX') {
       if (k === 'OX') c.occ = (c.occ || []).filter(o => o.id !== r[0]), await this.saveChat(dataId, c);
       const occ = c.occ || [];
-      await this.edit(chatId, mid, occ.length ? '💊 <b>Farmaci al bisogno</b>\nCompaiono in /terapia e nella richiesta ricette, senza promemoria. Tocca 🗑 per toglierne uno.' : 'Nessun farmaco al bisogno.',
-        { inline_keyboard: [...occ.map(o => [{ text: `🗑 ${o.name}`.slice(0, 60), callback_data: 'OX|' + o.id }]), [{ text: '⬅️ Elenco', callback_data: 'ML' }]] });
+      await this.edit(chatId, mid, occ.length ? '💊 <b>Farmaci al bisogno</b>\nCompaiono in /terapia e nella richiesta ricette, senza promemoria. Tocca un farmaco per cambiare forma, tipo di ricetta o toglierlo.' : 'Nessun farmaco al bisogno.',
+        { inline_keyboard: [...occ.map(o => [{ text: `💊 ${o.name}${o.dose ? ' ' + o.dose : ''} · ${unitOf(o)[1]}`.slice(0, 60), callback_data: 'OE|' + o.id }]), [{ text: '⬅️ Elenco', callback_data: 'ML' }]] });
       return ans(k === 'OX' ? 'Tolto' : '');
+    }
+    if (['OE', 'OU', 'OUS', 'ORX'].includes(k)) {   // scheda di un farmaco al bisogno
+      const o = (c.occ || []).find(x => x.id === r[0]); if (!o) return ans('Farmaco non trovato');
+      if (k === 'OU') {
+        const b = Object.entries(UNITS).map(([u, [, pl]]) => ({ text: `${(o.unit || 'cp') === u ? '✅ ' : ''}${pl}`, callback_data: `OUS|${o.id}|${u}` }));
+        const rows = []; for (let i = 0; i < b.length; i += 3) rows.push(b.slice(i, i + 3));
+        rows.push([{ text: '⬅️ Indietro', callback_data: 'OE|' + o.id }]);
+        await this.edit(chatId, mid, `🔢 In che forma è <b>${esc(o.name)}</b>?`, { inline_keyboard: rows }); return ans();
+      }
+      if (k === 'OUS') { if (r[1] === 'cp') delete o.unit; else if (UNITS[r[1]]) o.unit = r[1]; await this.saveChat(dataId, c); }
+      if (k === 'ORX') { const nx = { ssn: 'bianca', bianca: 'banco', banco: 'ssn' }[rxOf(o)]; if (nx === 'ssn') delete o.rx; else o.rx = nx; await this.saveChat(dataId, c); }
+      await this.edit(chatId, mid, `💊 <b>${esc(o.name)}</b>${o.dose ? ' ' + esc(o.dose) : ''} · al bisogno\n🔢 ${unitOf(o)[1]}\n${RX_LABEL[rxOf(o)]}`, { inline_keyboard: [
+        [{ text: `🔢 Forma: ${unitOf(o)[1]}`, callback_data: 'OU|' + o.id }, { text: RX_LABEL[rxOf(o)] + ' ↻', callback_data: 'ORX|' + o.id }],
+        [{ text: '🗑 Togli', callback_data: 'OX|' + o.id }, { text: '⬅️ Al bisogno', callback_data: 'OL' }]] });
+      return ans(k === 'OUS' ? 'Forma: ' + unitOf(o)[1] : k === 'ORX' ? RX_LABEL[rxOf(o)] : '');
     }
     if (k === 'MC') { const v = this.doneView(c); await this.edit(chatId, mid, v.text, v.kb); return ans(); }
     if (k === 'ML') { const v = this.medsView(c); await this.edit(chatId, mid, v.text, v.kb); return ans(); }
