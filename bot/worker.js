@@ -656,15 +656,15 @@ export class Store {
         const mine = (S.msgs || (S.m ? [[chatId, S.m]] : [])).filter(([ch]) => String(ch) === String(chatId)).map(([, m]) => m);
         if (!this.getLog(c, date, key)) mine.forEach(m => keep.add(m)); else known.push(...mine);
       }
-    // 1) quelli noti, uno alla volta (al massimo 35, per i limiti di Cloudflare)
+    // 1) quelli noti più vecchi del blocco qui sotto, uno alla volta (pochi: Cloudflare gratuito permette ~50 chiamate per volta)
     let single = 0;
-    for (const m of known.slice(-35)) { const r = await this.del(chatId, m); if (r.ok) single++; }
+    for (const m of known.filter(m => m <= fromMid - 1000).slice(-5)) { const r = await this.del(chatId, m); if (r.ok) single++; }
     // 2) il resto in blocco
     const ids = [];
     for (let m = fromMid; m > fromMid - 1000 && m > 0; m--) if (!keep.has(m)) ids.push(m);
     // se un blocco contiene un messaggio non cancellabile (es. l'inizio di un topic) Telegram rifiuta tutto il blocco:
     // lo dividiamo a metà finché non isoliamo quel messaggio (con un tetto di chiamate, per i limiti di Cloudflare)
-    let bulkOk = 0, err = '', budget = Math.max(10, 30 - Math.min(known.length, 35));   // Cloudflare gratuito: ~50 chiamate per volta
+    let bulkOk = 0, err = '', budget = 25;   // Cloudflare gratuito: ~50 chiamate per volta in tutto
     const bulk = async part => {
       if (!part.length || budget <= 0) return;
       budget--;
