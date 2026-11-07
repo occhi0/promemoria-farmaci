@@ -174,23 +174,38 @@ async function webhookSecret(env) {
   return [...new Uint8Array(h)].map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 48);
 }
 
-const HELP = `💊 <b>Promemoria farmaci</b>
-All'orario di ogni dose ti mando un messaggio con i pulsanti ✅ Preso, ⏰ ${SNOOZE_MIN} min e ⏭ Salta. Se non rispondi, te lo ricordo dopo ${FOLLOW_UP_MIN} minuti.
+const HELP = `💊 <b>Promemoria farmaci — come funziona</b>
 
-/aggiungi – aggiungi un farmaco
-/oggi – le dosi di oggi
-/farmaci – elenco, modifica, pausa, scorte, elimina
-/scorte – scorte rimaste
+<b>Promemoria</b>
+All'orario di ogni dose arriva un messaggio con ✅ Preso, ⏰ ${SNOOZE_MIN} min e ⏭ Salta. Se nessuno risponde, lo ricordo dopo ${FOLLOW_UP_MIN} minuti. Se si salta, chiedo il motivo.
+
+<b>Uso quotidiano</b>
+/oggi – dosi di oggi, con i farmaci al bisogno dati
+/terapia – terapia in corso, da mostrare al medico o inviare su WhatsApp
+/scorte – scorte rimaste e 📤 richiesta ricette a Vincenzo
+
+<b>Gestione farmaci</b>
+/farmaci – modifica nome, dose, orari, pausa, programma (cambi e fine), tipo di ricetta (📄 SSN · 💶 bianca · 🛒 da banco), archivio
+/aggiungi – nuovo farmaco; agli orari scrivi <i>al bisogno</i> se si prende solo quando serve
+In /scorte → farmaco: giacenza, confezione e 🔢 unità (compresse, applicazioni, erogazioni…)
+
+<b>Al bisogno</b>
+Pulsante 💊 Al bisogno sotto il pannello Oggi: tocchi il farmaco e segno ora, chi l'ha dato e il motivo (anche un'altra ora o un altro giorno).
+
+<b>Controlli</b>
 /storico – terapie a tempo, in corso e concluse
 /saltate – dosi saltate negli ultimi 90 giorni, con il motivo
 /bisogno – farmaci al bisogno dati negli ultimi 90 giorni
-/analisi – elenco delle analisi (meglio nel topic 🩸 Analisi)
-/terapia – elenco della terapia da mostrare al medico
-/esporta – copia di sicurezza completa
-/pulisci – ripulisce il gruppo (ultimi 2 giorni)
-/annulla – interrompi l'operazione in corso
 
-Puoi gestire anche i farmaci dei familiari: quando aggiungi un farmaco scegli per chi è. Per condividerli (ad esempio con le sorelle per i farmaci della mamma) crea un gruppo Telegram, aggiungimi e scrivi lì /start: nel gruppo potranno usarmi tutti.`;
+<b>Analisi</b>
+/analisi – elenco delle analisi di routine e occasionali, con codici e 📤 richiesta a Vincenzo (meglio nel topic 🩸 Analisi)
+
+<b>Avvisi automatici</b>
+• Scorte a 7 e a 2 giorni; nel gruppo semplice il messaggio 📦 Da ordinare
+• Studio chiuso? ⏰ Ricordamelo all'apertura: la richiesta arriva pronta quando apre
+
+<b>Servizio</b>
+/pulisci – cancella i messaggi vecchi · /annulla – interrompe l'operazione in corso · /esporta – copia di sicurezza · /trasferisci – sposta farmaci tra gruppi`;
 
 const COMMANDS = [   // ordinati per uso: giorno per giorno, farmaci, controlli, analisi, servizio
   { command: 'oggi', description: '📅 Dosi di oggi' },
