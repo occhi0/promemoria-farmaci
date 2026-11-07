@@ -1579,11 +1579,11 @@ export class Store {
     const extra = rq.extra || [];
     const chosen = [...uniq, ...occ, ...extra].filter(m => rq.sel.includes(m.id));
     const wa = this.waRequest(p, chosen, who);
-    const text = `${studioLine()}\n\n📤 <b>Richiesta ricette</b> — ${esc(info.full || p.name)}${info.to ? '\nDestinatario: ' + esc(info.to) : ''}${info.birth ? '\nData di nascita: ' + esc(info.birth) : ''}${info.cf ? '\nC.F. ' + esc(info.cf) : ''}\n\nTocca i farmaci per sceglierli (✅ = da richiedere). Sono già selezionati quelli con ${YELLOW_DAYS} giorni o meno.`;
+    const text = `${studioLine()}\n\n📤 <b>Richiesta ricette</b> — ${esc(info.full || p.name)}${info.to ? '\nDestinatario: ' + esc(info.to) : ''}${info.birth ? '\nData di nascita: ' + esc(info.birth) : ''}${info.cf ? '\nC.F. ' + esc(info.cf) : ''}\n\nTocca i farmaci per sceglierli (✅ = da richiedere). ${(c.reqDraft || {})[rq.pid] ? 'Le scelte restano salvate anche se chiudi: dopo l\'invio tocca <b>↺ Ricomincia</b>.' : `Sono già selezionati quelli con ${YELLOW_DAYS} giorni o meno.`}`;
     const kb = uniq.map(m => { const d = left(m); return [{ text: `${rq.sel.includes(m.id) ? '✅' : '⬜'} ${shortName(m.name)}${m.dose ? ' ' + m.dose : ''}${d != null ? ` · ${d} gg` : ''}`.slice(0, 60), callback_data: 'RT|' + m.id }]; });
     for (const o of occ) kb.push([{ text: `${rq.sel.includes(o.id) ? '✅' : '⬜'} ${shortName(o.name)} · al bisogno`.slice(0, 60), callback_data: 'RT|' + o.id }]);
     for (const x of extra) kb.push([{ text: `${rq.sel.includes(x.id) ? '✅' : '⬜'} ${shortName(x.name)} · solo ora`.slice(0, 60), callback_data: 'RT|' + x.id }]);
-    kb.push([{ text: '➕ Altro farmaco', callback_data: 'RA' }]);
+    kb.push([{ text: '➕ Altro farmaco', callback_data: 'RA' }, ...((c.reqDraft || {})[rq.pid] ? [{ text: '↺ Ricomincia', callback_data: 'RZ' }] : [])]);
     if (chosen.length) {
       if (!studioOpen()) kb.push([{ text: '⏰ Ricordamelo all\'apertura', callback_data: 'RW' }, { text: '📤 Invia comunque', url: this.waUrl(p, wa) }]);
       else kb.push([{ text: `📤 Invia${info.to ? ' a ' + info.to : ''} su WhatsApp (${chosen.length})`.slice(0, 60), url: this.waUrl(p, wa) }]);
@@ -1610,9 +1610,15 @@ export class Store {
   }
   startReq(c, uid, pid) {
     const today = romeParts().date;
-    const sel = c.meds.filter(m => m.person === pid && !this.ended(m, today) && rxOf(m) !== 'banco' && m.stock != null && m.times.length && m.stock / this.perDay(m) <= YELLOW_DAYS).map(m => m.id);
-    c.flows[uid] = { step: 'req', d: {}, req: { pid, sel } };
+    const auto = c.meds.filter(m => m.person === pid && !this.ended(m, today) && rxOf(m) !== 'banco' && m.stock != null && m.times.length && m.stock / this.perDay(m) <= YELLOW_DAYS).map(m => m.id);
+    // bozza salvata (scelte e farmaci "solo questa volta"): resta finché non si tocca ↺ Ricomincia, al massimo 30 giorni
+    const dr = (c.reqDraft || {})[pid];
+    if (dr && Date.now() - dr.at < 30 * 864e5) {
+      const sel = [...dr.sel, ...auto.filter(id => !(dr.auto || []).includes(id) && !dr.sel.includes(id))];   // i farmaci diventati "bassi" dopo si aggiungono
+      c.flows[uid] = { step: 'req', d: {}, req: { pid, sel, extra: dr.extra || [], auto } };
+    } else c.flows[uid] = { step: 'req', d: {}, req: { pid, sel: auto, auto } };
   }
+  saveDraft(c, rq) { c.reqDraft = c.reqDraft || {}; c.reqDraft[rq.pid] = { sel: [...rq.sel], extra: rq.extra || [], auto: rq.auto || [], at: Date.now() }; }
   stockView(c) {
     if (!c.meds.length) return 'Non ci sono ancora farmaci.';
     const daysLeft = m => (m.stock == null || !m.times.length || this.ended(m, romeParts().date)) ? Infinity : m.stock / this.perDay(m);
@@ -1689,7 +1695,7 @@ export class Store {
     const c = await this.chat(dataId);
     const [k, ...r] = data.split('|');
     const today = romeParts().date;
-    if (isMirror && !['T', 'S', 'Z', 'U', 'O', 'OR', 'TP', 'SA', 'OS', 'RQ', 'RT', 'RA', 'RS', 'RX', 'RW', 'RWo', 'LQ', 'LT', 'LW', 'LQX', 'SR', 'PB', 'PG', 'PW', 'PX', 'PR', 'PT', 'PD'].includes(k)) return ans();
+    if (isMirror && !['T', 'S', 'Z', 'U', 'O', 'OR', 'TP', 'SA', 'OS', 'RQ', 'RT', 'RA', 'RS', 'RX', 'RW', 'RWo', 'RZ', 'LQ', 'LT', 'LW', 'LQX', 'SR', 'PB', 'PG', 'PW', 'PX', 'PR', 'PT', 'PD'].includes(k)) return ans();
 
     if (['T', 'S', 'Z', 'U', 'O'].includes(k)) {
       const [date, medId, time] = r;
@@ -1909,6 +1915,7 @@ export class Store {
       acl.wakes = (acl.wakes || []).filter(w => !(w.chat === target && w.by === uid && w.kind !== 'lab'));   // una sola richiesta in attesa per persona
       acl.wakes.push({ chat: target, by: uid, who, at: no.ts, until: no.until, to: (p.info || {}).to || '', names: meds.map(m => `${m.name}${m.dose ? ' ' + m.dose : ''}`), url: this.waUrl(p, this.waRequest(p, meds, who)), mirror: isMirror });
       await this.saveAcl(acl);
+      if (k === 'RW' && c.reqDraft && c.reqDraft[p.id]) { delete c.reqDraft[p.id]; await this.saveChat(dataId, c); }   // la richiesta è pronta per l'apertura: si riparte da zero
       if (k === 'RW' && isMirror) await this.del(chatId, mid);
       return tg(this.env, 'answerCallbackQuery', { callback_query_id: q.id, text: `⏰ Ok! Ti avviso ${no.label}, quando lo studio apre.`, show_alert: true });
     }
@@ -1934,7 +1941,7 @@ export class Store {
       const id = (r[0] === 'y' ? 'o' : 'x') + rid();
       if (r[0] === 'y') { c.occ = c.occ || []; c.occ.push({ id, person: fl2.req.pid, name: fl2.d.name, dose: '' }); }
       else { fl2.req.extra = fl2.req.extra || []; fl2.req.extra.push({ id, name: fl2.d.name, dose: '' }); }
-      fl2.req.sel.push(id);
+      fl2.req.sel.push(id); this.saveDraft(c, fl2.req);
       await this.del(chatId, mid);
       fl2.step = 'req'; fl2.d = {};
       await this.saveChat(dataId, c);
@@ -1945,10 +1952,17 @@ export class Store {
       const fl2 = c.flows[uid];
       if (!fl2 || !fl2.req) return ans('Ricomincia da /scorte');
       const id = r[0]; const sel = fl2.req.sel;
-      fl2.req.sel = sel.includes(id) ? sel.filter(x => x !== id) : [...sel, id];
+      fl2.req.sel = sel.includes(id) ? sel.filter(x => x !== id) : [...sel, id]; this.saveDraft(c, fl2.req);
       await this.saveChat(dataId, c);
       const v = this.reqView(c, uid, who, isMirror); await this.edit(chatId, mid, v.text, v.kb);
       return ans();
+    }
+    if (k === 'RZ') {   // ↺ Ricomincia: via la bozza, si riparte dai farmaci in esaurimento
+      const fl2 = c.flows[uid]; if (!fl2 || !fl2.req) return ans();
+      if (c.reqDraft) delete c.reqDraft[fl2.req.pid];
+      this.startReq(c, uid, fl2.req.pid); c.flows[uid].req.mid = fl2.req.mid;
+      await this.saveChat(dataId, c);
+      const v = this.reqView(c, uid, who, isMirror); await this.edit(chatId, mid, v.text, v.kb); return ans('Ricominciata');
     }
     if (k === 'RX') { delete c.flows[uid]; await this.saveChat(dataId, c); if (isMirror) await this.del(chatId, mid); else await this.edit(chatId, mid, 'Richiesta chiusa.'); return ans(); }
     if (k === 'OR') { const v = this.todayView(c); await this.edit(chatId, mid, v.text, v.kb); return ans('Aggiornato'); }
