@@ -217,6 +217,9 @@ const MIRROR_COMMANDS = [   // menu del gruppo semplice: solo cose da guardare
   { command: 'oggi', description: '📅 Rimetti il pannello di oggi, se è sparito' }
 ];
 
+const RX_LABEL = { ssn: '📄 Ricetta SSN', bianca: '💶 Ricetta bianca', banco: '🛒 Da banco' };
+const rxOf = m => (m && m.rx) || 'ssn';
+
 export default {
   async fetch(req, env) {
     const url = new URL(req.url);
@@ -402,8 +405,10 @@ export class Store {
     const days = Math.floor(left);
     const until = addDays(romeParts().date, days).date;
     const howLong = m.stock === 0 ? '<b>sono finite</b>' : `bastano per ${days < 1 ? 'meno di un giorno' : 'circa ' + days + (days === 1 ? ' giorno' : ' giorni')}${days >= 1 ? ` (fino a ${fmtDate(until)})` : ''}`;
-    const text = `${level === LAST_STOCK_DAYS ? '⚠️ <b>Ultimo avviso scorte</b>' : '📦 <b>Scorte in esaurimento</b>'}\n<b>${esc(m.name)}</b>${m.dose ? ' ' + esc(m.dose) : ''}${this.pp(c, m.person)}: restano ${m.stock} compresse, ${howLong}.\nRicordati ricetta e farmacia. Quando lo ricomprate, toccate qui sotto.`;
-    return { text, kb: this.packKb(m) };
+    const text = `${level === LAST_STOCK_DAYS ? '⚠️ <b>Ultimo avviso scorte</b>' : '📦 <b>Scorte in esaurimento</b>'}\n<b>${esc(m.name)}</b>${m.dose ? ' ' + esc(m.dose) : ''}${this.pp(c, m.person)}: restano ${m.stock} compresse, ${howLong}.\n${rxOf(m) === 'banco' ? '🛒 Da comprare in farmacia, senza ricetta.' : rxOf(m) === 'bianca' ? 'Ricordati la ricetta bianca e la farmacia.' : 'Ricordati ricetta e farmacia.'} Quando lo ricomprate, toccate qui sotto.`;
+    const kb = this.packKb(m);
+    if (rxOf(m) === 'banco') kb.inline_keyboard.unshift([{ text: '🛒 Manda alla farmacia', url: 'https://wa.me/?text=' + encodeURIComponent(this.waShop(c, [m])) }]);
+    return { text, kb };
   }
   unlog(c, date, key, m) {
     const e = this.getLog(c, date, key);
@@ -1145,7 +1150,7 @@ export class Store {
   medText(c, m) {
     const today = romeParts().date, next = (m.plan || []).filter(p => p.from > today).sort((a, b) => a.from < b.from ? -1 : 1)[0];
     const extra = (next ? `\n🔁 dal ${fmtDate(next.from)}: ${next.times.join(', ')}` : '') + (m.end ? `\n🏁 ${this.ended(m, today) ? 'terminata il' : 'fino al'} ${fmtDate(m.end)}` : '');
-    return `<b>${esc(m.name)}</b>${m.dose ? ' ' + esc(m.dose) : ''}${m.paused ? ' ⏸ <i>in pausa</i>' : ''}${this.multi(c) ? '\n👤 ' + esc(this.person(c, m.person)) : ''}\n🕐 ${m.times.join(', ')} · ${daysText(m.days)}${m.stock != null ? `\n📦 ${m.stock} compresse` : ''}` + extra;
+    return `<b>${esc(m.name)}</b>${m.dose ? ' ' + esc(m.dose) : ''}${m.paused ? ' ⏸ <i>in pausa</i>' : ''}${this.multi(c) ? '\n👤 ' + esc(this.person(c, m.person)) : ''}\n🕐 ${m.times.join(', ')} · ${daysText(m.days)}${m.stock != null ? `\n📦 ${m.stock} compresse` : ''}\n${RX_LABEL[rxOf(m)]}` + extra;
   }
   therapyMsg(c, title) {
     const text = this.therapyView(c, title);
@@ -1454,6 +1459,7 @@ export class Store {
           [{ text: '✏️ Nome', callback_data: 'ME|' + m.id + '|name' }, { text: '✏️ Dose', callback_data: 'ME|' + m.id + '|dose' }, { text: '🕐 Orari', callback_data: 'ME|' + m.id + '|times' }],
           [...(c.persons.length > 1 ? [{ text: '👤 Chi', callback_data: 'MW|' + m.id }] : []), { text: m.paused ? '▶️ Riprendi' : '⏸ Pausa', callback_data: 'MP|' + m.id }, { text: '📦 Scorte', callback_data: 'SK|' + m.id }],
           [{ text: '📆 Programma', callback_data: 'MT|' + m.id }, this.ended(m, romeParts().date) ? { text: '♻️ Riattiva', callback_data: 'MR|' + m.id } : { text: '🗂 Archivia', callback_data: 'MA|' + m.id }],
+          [{ text: RX_LABEL[rxOf(m)] + ' ↻', callback_data: 'MRX|' + m.id }],
           [{ text: '🗑 Elimina', callback_data: 'MD|' + m.id }, { text: '⬅️ Elenco', callback_data: 'ML' }]
         ]
       }
@@ -1470,7 +1476,12 @@ export class Store {
     let wa = `Buongiorno${info.to ? ' ' + info.to : ''}, vorrei richiedere ${meds.length === 1 ? 'la ricetta' : 'le ricette'} per:\n*${info.full || p.name}*`;
     if (info.birth) wa += `\nData di nascita: ${info.birth}`;
     if (info.cf) wa += `\nC.F. ${info.cf}`;
-    return wa + '\n\n' + meds.map(m => `• ${m.name}${m.dose ? ' ' + m.dose : ''}`).join('\n') + `\n\nGrazie${who ? ',\n' + who : ''}`;
+    return wa + '\n\n' + meds.map(m => `• ${m.name}${m.dose ? ' ' + m.dose : ''}${rxOf(m) === 'bianca' ? ' (ricetta bianca)' : ''}`).join('\n') + `\n\nGrazie${who ? ',\n' + who : ''}`;
+  }
+  // lista per la farmacia (farmaci da banco): si sceglie a chi mandarla su WhatsApp
+  waShop(c, meds) {
+    const pn = [...new Set(meds.map(m => this.person(c, m.person)))].join(', ');
+    return `🛒 Da comprare in farmacia${pn ? ' (' + pn + ')' : ''}:\n` + meds.map(m => `• ${m.name}${m.dose ? ' ' + m.dose : ''}${m.pack ? ' – 1 conf.' : ''}`).join('\n');
   }
   // Farmaci con scorte per 7 giorni o meno (uno per nome+dosaggio), dal più urgente
   contact(c) {   // telefono della segreteria, dai dati dell'assistita
@@ -1498,13 +1509,16 @@ export class Store {
     let t = `📦 <b>Da ordinare</b> — scorte per ${LOW_STOCK_DAYS} giorni o meno\n`;
     t += '\n' + low.map(m => `${days(m) <= LAST_STOCK_DAYS ? '🔴' : '🟠'} <b>${esc(m.name)}</b>${m.dose ? ' ' + esc(m.dose) : ''}${this.pp(c, m.person)}: ${m.stock} ${m.stock === 1 ? 'compressa' : 'compresse'}, ${days(m) < 1 ? 'meno di un giorno' : 'circa ' + days(m) + (days(m) === 1 ? ' giorno' : ' giorni')}`).join('\n');
     const kb = [];
-    const pids = [...new Set(low.map(m => m.person))];
+    const rxLow = low.filter(m => rxOf(m) !== 'banco'), shop = low.filter(m => rxOf(m) === 'banco');
+    if (shop.length) t += `\n\n🛒 <b>Da comprare in farmacia</b> (senza ricetta): ${shop.map(m => esc(m.name)).join(', ')}`;
+    const pids = [...new Set(rxLow.map(m => m.person))];
     let missing = false;
+    if (shop.length) kb.push([{ text: '🛒 Manda la lista della farmacia', url: 'https://wa.me/?text=' + encodeURIComponent(this.waShop(c, shop)) }]);
     for (const pid of pids) {
       const p = c.persons.find(x => x.id === pid) || { name: '—' };
       const info = p.info || {};
       if (!info.full) missing = true;
-      const url = this.waUrl(p, this.waRequest(p, low.filter(m => m.person === pid)));
+      const url = this.waUrl(p, this.waRequest(p, rxLow.filter(m => m.person === pid)));
       if (!studioOpen()) kb.push([{ text: '⏰ Ricordamelo all\'apertura', callback_data: 'RWo|' + pid }, { text: '📤 Invia comunque', url }]);
       else kb.push([{ text: `📤 Invia richiesta${info.to ? ' a ' + info.to : ''}${pids.length > 1 ? ' · ' + p.name : ''}`.slice(0, 60), url }]);
     }
@@ -1514,8 +1528,11 @@ export class Store {
     ]);
     const noPack = low.filter(m => !m.pack);
     const sl = studioLine();
-    t += `\n\n${sl}`;
-    t += studioOpen() ? `\n👉 Tocca <b>Invia richiesta</b> per mandare la richiesta delle ricette su WhatsApp.` : `\n👉 Tocca <b>Ricordamelo all'apertura</b>: quando lo studio apre ti arriva la richiesta pronta da inviare (oppure <b>Invia comunque</b>).`;
+    if (rxLow.length) {
+      t += `\n\n${sl}`;
+      t += studioOpen() ? `\n👉 Tocca <b>Invia richiesta</b> per mandare la richiesta delle ricette su WhatsApp.` : `\n👉 Tocca <b>Ricordamelo all'apertura</b>: quando lo studio apre ti arriva la richiesta pronta da inviare (oppure <b>Invia comunque</b>).`;
+    }
+    if (shop.length) t += `\n👉 Per i farmaci 🛒 tocca <b>Manda la lista della farmacia</b> e scegli a chi mandarla.`;
     if (low.some(m => m.pack)) t += `\n👉 Quando un farmaco è stato ritirato in farmacia, tocca il suo pulsante <b>☑️</b> qui sotto (2 confezioni, oppure "1 conf."): la scorta si aggiorna e il farmaco esce dalla lista.`;
     if (noPack.length) t += `\n\n<i>Per avere il pulsante ☑️ anche per ${noPack.map(m => esc(m.name)).join(', ')}, nel gruppo principale imposta le compresse per confezione (/scorte → farmaco → ⚙️).</i>`;
     if (missing) t += `\n\n<i>Mancano i dati dell'assistita: impostali nel gruppo principale da /scorte → Richiedi ricette.</i>`;
@@ -1536,7 +1553,7 @@ export class Store {
     const today = romeParts().date;
     const left = m => (m.stock == null || !m.times.length) ? null : Math.floor(m.stock / this.perDay(m));
     // prima quelli che finiscono prima (come /scorte), in fondo quelli senza conteggio
-    const ms = c.meds.filter(m => m.person === rq.pid && !this.ended(m, today))
+    const ms = c.meds.filter(m => m.person === rq.pid && !this.ended(m, today) && rxOf(m) !== 'banco')
       .sort((a, b) => (left(a) ?? Infinity) - (left(b) ?? Infinity) || a.name.localeCompare(b.name, 'it', { sensitivity: 'base' }));
     const seen = new Set(); const uniq = ms.filter(m => { const k = (m.name + '|' + m.dose).toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
     const info = p.info || {};
@@ -1575,7 +1592,7 @@ export class Store {
   }
   startReq(c, uid, pid) {
     const today = romeParts().date;
-    const sel = c.meds.filter(m => m.person === pid && !this.ended(m, today) && m.stock != null && m.times.length && m.stock / this.perDay(m) <= YELLOW_DAYS).map(m => m.id);
+    const sel = c.meds.filter(m => m.person === pid && !this.ended(m, today) && rxOf(m) !== 'banco' && m.stock != null && m.times.length && m.stock / this.perDay(m) <= YELLOW_DAYS).map(m => m.id);
     c.flows[uid] = { step: 'req', d: {}, req: { pid, sel } };
   }
   stockView(c) {
@@ -1586,10 +1603,10 @@ export class Store {
       if (m.stock == null) return `⚪ ${esc(m.name)}${this.pp(c, m.person)}: non conteggiate`;
       const left = m.stock / this.perDay(m), d = Math.floor(left);
       const dot = left <= LOW_STOCK_DAYS ? '🔴' : left <= YELLOW_DAYS ? '🟡' : '🟢';
-      const txt = `${esc(m.name)}${this.pp(c, m.person)}: ${m.stock} compresse, ${d < 1 ? 'meno di un giorno' : 'circa ' + d + (d === 1 ? ' giorno' : ' giorni')}`;
+      const txt = `${esc(m.name)}${rxOf(m) === 'banco' ? ' 🛒' : rxOf(m) === 'bianca' ? ' 💶' : ''}${this.pp(c, m.person)}: ${m.stock} compresse, ${d < 1 ? 'meno di un giorno' : 'circa ' + d + (d === 1 ? ' giorno' : ' giorni')}`;
       return `${dot} ${dot === '🔴' ? '<b>' + txt + '</b>' : txt}`;
     });
-    return `📦 <b>Scorte</b>\n\n${lines.join('\n')}\n\n🟢 più di ${YELLOW_DAYS} giorni · 🟡 ${YELLOW_DAYS} giorni o meno · 🔴 ${LOW_STOCK_DAYS} giorni o meno · ⚪ non conteggiate`;
+    return `📦 <b>Scorte</b>\n\n${lines.join('\n')}\n\n🟢 più di ${YELLOW_DAYS} giorni · 🟡 ${YELLOW_DAYS} giorni o meno · 🔴 ${LOW_STOCK_DAYS} giorni o meno · ⚪ non conteggiate${c.meds.some(m => rxOf(m) !== 'ssn') ? '\n🛒 da banco, senza ricetta · 💶 ricetta bianca' : ''}`;
   }
   // "4 volte al giorno dal 3/11 al 9/11, 3 volte al giorno dal 10/11 al 16/11"
   periodLine(m) {
@@ -1984,8 +2001,14 @@ export class Store {
     if (k === 'MC') { const v = this.doneView(c); await this.edit(chatId, mid, v.text, v.kb); return ans(); }
     if (k === 'ML') { const v = this.medsView(c); await this.edit(chatId, mid, v.text, v.kb); return ans(); }
     const m = c.meds.find(x => x.id === r[0]);
-    if (['MM', 'MP', 'MS', 'MD', 'MDY', 'ME', 'MW', 'MWP', 'MWN', 'MT', 'MTC', 'MTE', 'MTX', 'MTS', 'MA', 'MAY', 'MR', 'SK', 'SA', 'SU', 'PK'].includes(k) && !m) { const v = this.medsView(c); await this.edit(chatId, mid, v.text, v.kb); return ans('Farmaco non trovato'); }
+    if (['MM', 'MP', 'MS', 'MD', 'MDY', 'ME', 'MW', 'MWP', 'MWN', 'MT', 'MTC', 'MTE', 'MTX', 'MTS', 'MA', 'MAY', 'MR', 'SK', 'SA', 'SU', 'PK', 'MRX'].includes(k) && !m) { const v = this.medsView(c); await this.edit(chatId, mid, v.text, v.kb); return ans('Farmaco non trovato'); }
     if (k === 'MM') { const v = this.medDetail(c, m); await this.edit(chatId, mid, v.text, v.kb); return ans(); }
+    if (k === 'MRX') {   // tipo di ricetta: SSN → bianca → da banco (vale per tutte le righe con lo stesso nome)
+      const nx = { ssn: 'bianca', bianca: 'banco', banco: 'ssn' }[rxOf(m)];
+      for (const x of c.meds) if (x.name.toLowerCase() === m.name.toLowerCase()) { if (nx === 'ssn') delete x.rx; else x.rx = nx; }
+      await this.saveChat(dataId, c); await this.refreshPanels(acl, dataId, c);
+      const v = this.medDetail(c, m); await this.edit(chatId, mid, v.text, v.kb); return ans(RX_LABEL[nx]);
+    }
     if (k === 'MP') { m.paused = !m.paused; await this.saveChat(dataId, c); const v = this.medDetail(c, m); await this.edit(chatId, mid, v.text, v.kb); return ans(m.paused ? 'In pausa: niente promemoria' : 'Promemoria riattivati'); }
     if (k === 'MT') { const v = this.planView(c, m); await this.edit(chatId, mid, v.text, v.kb); return ans(); }
     if (k === 'MTC') {
