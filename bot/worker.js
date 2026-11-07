@@ -180,7 +180,7 @@ All'orario di ogni dose ti mando un messaggio con i pulsanti ✅ Preso, ⏰ ${SN
 /aggiungi – aggiungi un farmaco
 /oggi – le dosi di oggi
 /farmaci – elenco, modifica, pausa, scorte, elimina
-/scorte – compresse rimaste
+/scorte – scorte rimaste
 /storico – terapie a tempo, in corso e concluse
 /saltate – dosi saltate negli ultimi 90 giorni, con il motivo
 /bisogno – farmaci al bisogno dati negli ultimi 90 giorni
@@ -219,6 +219,10 @@ const MIRROR_COMMANDS = [   // menu del gruppo semplice: solo cose da guardare
 
 const RX_LABEL = { ssn: '📄 Ricetta SSN', bianca: '💶 Ricetta bianca', banco: '🛒 Da banco' };
 const rxOf = m => (m && m.rx) || 'ssn';
+// unità di conteggio delle scorte: [singolare, plurale]
+const UNITS = { cp: ['compressa', 'compresse'], cps: ['capsula', 'capsule'], app: ['applicazione', 'applicazioni'], ero: ['erogazione', 'erogazioni'], bus: ['bustina', 'bustine'], fl: ['flacone', 'flaconi'], fia: ['fiala', 'fiale'], gtt: ['goccia', 'gocce'], dos: ['dose', 'dosi'] };
+const unitOf = m => UNITS[(m && m.unit) || 'cp'] || UNITS.cp;
+const un = (m, n) => `${n} ${unitOf(m)[n === 1 ? 0 : 1]}`;   // es. "20 applicazioni", "1 compressa"
 
 export default {
   async fetch(req, env) {
@@ -387,12 +391,13 @@ export class Store {
   stockCard(c, m, note) {
     const left = (m.stock != null && m.times.length) ? Math.floor(m.stock / this.perDay(m)) : null;
     let t = `${note ? note + '\n\n' : ''}📦 <b>${esc(m.name)}</b>${m.dose ? ' ' + esc(m.dose) : ''}${this.pp(c, m.person)}\n`;
-    t += m.stock == null ? 'Scorte non conteggiate.' : `Scorte: <b>${m.stock}</b> compresse${left != null ? `, circa ${left} ${left === 1 ? 'giorno' : 'giorni'}` : ''}.`;
-    t += m.pack ? `\nConfezione da ${m.pack}.` : '\nNon so ancora quante compresse ci sono in una confezione.';
+    t += m.stock == null ? 'Scorte non conteggiate.' : `Scorte: <b>${m.stock}</b> ${unitOf(m)[m.stock === 1 ? 0 : 1]}${left != null ? `, circa ${left} ${left === 1 ? 'giorno' : 'giorni'}` : ''}.`;
+    t += m.pack ? `\nConfezione da ${m.pack}.` : `\nNon so ancora quante ${unitOf(m)[1]} ci sono in una confezione.`;
     const kb = [];
     if (m.pack) kb.push([{ text: `➕ 1 conf. (+${m.pack})`, callback_data: `SA|${m.id}|1` }, { text: `➕ 2 conf. (+${m.pack * 2})`, callback_data: `SA|${m.id}|2` }]);
-    else kb.push([{ text: '⚙️ Imposta compresse per confezione', callback_data: 'PK|' + m.id }]);
+    else kb.push([{ text: `⚙️ Imposta ${unitOf(m)[1]} per confezione`.slice(0, 60), callback_data: 'PK|' + m.id }]);
     kb.push([{ text: '✏️ Giacenza', callback_data: 'MS|' + m.id }].concat(m.pack ? [{ text: '⚙️ Confezione', callback_data: 'PK|' + m.id }] : []));
+    kb.push([{ text: `🔢 Unità: ${unitOf(m)[1]}`, callback_data: 'MU|' + m.id }]);
     kb.push([{ text: '⬅️ Farmaco', callback_data: 'MM|' + m.id }]);
     return { text: t, kb: { inline_keyboard: kb } };
   }
@@ -405,7 +410,7 @@ export class Store {
     const days = Math.floor(left);
     const until = addDays(romeParts().date, days).date;
     const howLong = m.stock === 0 ? '<b>sono finite</b>' : `bastano per ${days < 1 ? 'meno di un giorno' : 'circa ' + days + (days === 1 ? ' giorno' : ' giorni')}${days >= 1 ? ` (fino a ${fmtDate(until)})` : ''}`;
-    const text = `${level === LAST_STOCK_DAYS ? '⚠️ <b>Ultimo avviso scorte</b>' : '📦 <b>Scorte in esaurimento</b>'}\n<b>${esc(m.name)}</b>${m.dose ? ' ' + esc(m.dose) : ''}${this.pp(c, m.person)}: restano ${m.stock} compresse, ${howLong}.\n${rxOf(m) === 'banco' ? '🛒 Da comprare in farmacia, senza ricetta.' : rxOf(m) === 'bianca' ? 'Ricordati la ricetta bianca e la farmacia.' : 'Ricordati ricetta e farmacia.'} Quando lo ricomprate, toccate qui sotto.`;
+    const text = `${level === LAST_STOCK_DAYS ? '⚠️ <b>Ultimo avviso scorte</b>' : '📦 <b>Scorte in esaurimento</b>'}\n<b>${esc(m.name)}</b>${m.dose ? ' ' + esc(m.dose) : ''}${this.pp(c, m.person)}: restano ${un(m, m.stock)}, ${howLong}.\n${rxOf(m) === 'banco' ? '🛒 Da comprare in farmacia, senza ricetta.' : rxOf(m) === 'bianca' ? 'Ricordati la ricetta bianca e la farmacia.' : 'Ricordati ricetta e farmacia.'} Quando lo ricomprate, toccate qui sotto.`;
     const kb = this.packKb(m);
     if (rxOf(m) === 'banco') kb.inline_keyboard.unshift([{ text: '🛒 Manda alla farmacia', url: 'https://wa.me/?text=' + encodeURIComponent(this.waShop(c, [m])) }]);
     return { text, kb };
@@ -1133,7 +1138,7 @@ export class Store {
         const alert = this.stockAlert(c, m);
         delete c.flows[uid]; await save();
         await this.refreshPanels(await this.acl(), chatId, c);
-        await this.send(chatId, m.stock == null ? `Scorte di <b>${esc(m.name)}</b> non più conteggiate.` : `📦 Giacenza di <b>${esc(m.name)}</b>: ${m.stock} compresse.`);
+        await this.send(chatId, m.stock == null ? `Scorte di <b>${esc(m.name)}</b> non più conteggiate.` : `📦 Giacenza di <b>${esc(m.name)}</b>: ${un(m, m.stock)}.`);
         if (alert) await this.send(chatId, alert.text, alert.kb);
         return;
       }
@@ -1150,7 +1155,7 @@ export class Store {
   medText(c, m) {
     const today = romeParts().date, next = (m.plan || []).filter(p => p.from > today).sort((a, b) => a.from < b.from ? -1 : 1)[0];
     const extra = (next ? `\n🔁 dal ${fmtDate(next.from)}: ${next.times.join(', ')}` : '') + (m.end ? `\n🏁 ${this.ended(m, today) ? 'terminata il' : 'fino al'} ${fmtDate(m.end)}` : '');
-    return `<b>${esc(m.name)}</b>${m.dose ? ' ' + esc(m.dose) : ''}${m.paused ? ' ⏸ <i>in pausa</i>' : ''}${this.multi(c) ? '\n👤 ' + esc(this.person(c, m.person)) : ''}\n🕐 ${m.times.join(', ')} · ${daysText(m.days)}${m.stock != null ? `\n📦 ${m.stock} compresse` : ''}\n${RX_LABEL[rxOf(m)]}` + extra;
+    return `<b>${esc(m.name)}</b>${m.dose ? ' ' + esc(m.dose) : ''}${m.paused ? ' ⏸ <i>in pausa</i>' : ''}${this.multi(c) ? '\n👤 ' + esc(this.person(c, m.person)) : ''}\n🕐 ${m.times.join(', ')} · ${daysText(m.days)}${m.stock != null ? `\n📦 ${un(m, m.stock)}` : ''}\n${RX_LABEL[rxOf(m)]}` + extra;
   }
   therapyMsg(c, title) {
     const text = this.therapyView(c, title);
@@ -1507,7 +1512,7 @@ export class Store {
     }
     const days = m => Math.floor(m.stock / this.perDay(m));
     let t = `📦 <b>Da ordinare</b> — scorte per ${LOW_STOCK_DAYS} giorni o meno\n`;
-    t += '\n' + low.map(m => `${days(m) <= LAST_STOCK_DAYS ? '🔴' : '🟠'} <b>${esc(m.name)}</b>${m.dose ? ' ' + esc(m.dose) : ''}${this.pp(c, m.person)}: ${m.stock} ${m.stock === 1 ? 'compressa' : 'compresse'}, ${days(m) < 1 ? 'meno di un giorno' : 'circa ' + days(m) + (days(m) === 1 ? ' giorno' : ' giorni')}`).join('\n');
+    t += '\n' + low.map(m => `${days(m) <= LAST_STOCK_DAYS ? '🔴' : '🟠'} <b>${esc(m.name)}</b>${m.dose ? ' ' + esc(m.dose) : ''}${this.pp(c, m.person)}: ${un(m, m.stock)}, ${days(m) < 1 ? 'meno di un giorno' : 'circa ' + days(m) + (days(m) === 1 ? ' giorno' : ' giorni')}`).join('\n');
     const kb = [];
     const rxLow = low.filter(m => rxOf(m) !== 'banco'), shop = low.filter(m => rxOf(m) === 'banco');
     if (shop.length) t += `\n\n🛒 <b>Da comprare in farmacia</b> (senza ricetta): ${shop.map(m => esc(m.name)).join(', ')}`;
@@ -1534,7 +1539,7 @@ export class Store {
     }
     if (shop.length) t += `\n👉 Per i farmaci 🛒 tocca <b>Manda la lista della farmacia</b> e scegli a chi mandarla.`;
     if (low.some(m => m.pack)) t += `\n👉 Quando un farmaco è stato ritirato in farmacia, tocca il suo pulsante <b>☑️</b> qui sotto (2 confezioni, oppure "1 conf."): la scorta si aggiorna e il farmaco esce dalla lista.`;
-    if (noPack.length) t += `\n\n<i>Per avere il pulsante ☑️ anche per ${noPack.map(m => esc(m.name)).join(', ')}, nel gruppo principale imposta le compresse per confezione (/scorte → farmaco → ⚙️).</i>`;
+    if (noPack.length) t += `\n\n<i>Per avere il pulsante ☑️ anche per ${noPack.map(m => esc(m.name)).join(', ')}, nel gruppo principale imposta quante unità ci sono in una confezione (/scorte → farmaco → ⚙️).</i>`;
     if (missing) t += `\n\n<i>Mancano i dati dell'assistita: impostali nel gruppo principale da /scorte → Richiedi ricette.</i>`;
     const markup = { inline_keyboard: kb };
     const isNew = P.orderKeys !== undefined && low.some(m => !P.orderKeys.split(',').includes(m.id));
@@ -1603,7 +1608,7 @@ export class Store {
       if (m.stock == null) return `⚪ ${esc(m.name)}${this.pp(c, m.person)}: non conteggiate`;
       const left = m.stock / this.perDay(m), d = Math.floor(left);
       const dot = left <= LOW_STOCK_DAYS ? '🔴' : left <= YELLOW_DAYS ? '🟡' : '🟢';
-      const txt = `${esc(m.name)}${rxOf(m) === 'banco' ? ' 🛒' : rxOf(m) === 'bianca' ? ' 💶' : ''}${this.pp(c, m.person)}: ${m.stock} compresse, ${d < 1 ? 'meno di un giorno' : 'circa ' + d + (d === 1 ? ' giorno' : ' giorni')}`;
+      const txt = `${esc(m.name)}${rxOf(m) === 'banco' ? ' 🛒' : rxOf(m) === 'bianca' ? ' 💶' : ''}${this.pp(c, m.person)}: ${un(m, m.stock)}, ${d < 1 ? 'meno di un giorno' : 'circa ' + d + (d === 1 ? ' giorno' : ' giorni')}`;
       return `${dot} ${dot === '🔴' ? '<b>' + txt + '</b>' : txt}`;
     });
     return `📦 <b>Scorte</b>\n\n${lines.join('\n')}\n\n🟢 più di ${YELLOW_DAYS} giorni · 🟡 ${YELLOW_DAYS} giorni o meno · 🔴 ${LOW_STOCK_DAYS} giorni o meno · ⚪ non conteggiate${c.meds.some(m => rxOf(m) !== 'ssn') ? '\n🛒 da banco, senza ricetta · 💶 ricetta bianca' : ''}`;
@@ -2001,8 +2006,21 @@ export class Store {
     if (k === 'MC') { const v = this.doneView(c); await this.edit(chatId, mid, v.text, v.kb); return ans(); }
     if (k === 'ML') { const v = this.medsView(c); await this.edit(chatId, mid, v.text, v.kb); return ans(); }
     const m = c.meds.find(x => x.id === r[0]);
-    if (['MM', 'MP', 'MS', 'MD', 'MDY', 'ME', 'MW', 'MWP', 'MWN', 'MT', 'MTC', 'MTE', 'MTX', 'MTS', 'MA', 'MAY', 'MR', 'SK', 'SA', 'SU', 'PK', 'MRX'].includes(k) && !m) { const v = this.medsView(c); await this.edit(chatId, mid, v.text, v.kb); return ans('Farmaco non trovato'); }
+    if (['MM', 'MP', 'MS', 'MD', 'MDY', 'ME', 'MW', 'MWP', 'MWN', 'MT', 'MTC', 'MTE', 'MTX', 'MTS', 'MA', 'MAY', 'MR', 'SK', 'SA', 'SU', 'PK', 'MRX', 'MU', 'MUS'].includes(k) && !m) { const v = this.medsView(c); await this.edit(chatId, mid, v.text, v.kb); return ans('Farmaco non trovato'); }
     if (k === 'MM') { const v = this.medDetail(c, m); await this.edit(chatId, mid, v.text, v.kb); return ans(); }
+    if (k === 'MU') {   // scelta dell'unità di conteggio
+      const kb = Object.entries(UNITS).map(([u, [, pl]]) => ({ text: `${(m.unit || 'cp') === u ? '✅ ' : ''}${pl}`, callback_data: `MUS|${m.id}|${u}` }));
+      const rows = []; for (let i = 0; i < kb.length; i += 3) rows.push(kb.slice(i, i + 3));
+      rows.push([{ text: '⬅️ Scorte', callback_data: 'SK|' + m.id }]);
+      await this.edit(chatId, mid, `🔢 Come conti le scorte di <b>${esc(m.name)}</b>?\nPer i colliri, ad esempio, <b>applicazioni</b>; per gli inalatori <b>erogazioni</b>.`, { inline_keyboard: rows });
+      return ans();
+    }
+    if (k === 'MUS') {
+      if (r[1] === 'cp') delete m.unit; else if (UNITS[r[1]]) m.unit = r[1];
+      for (const x of c.meds) if (x !== m && x.name.toLowerCase() === m.name.toLowerCase()) { if (m.unit) x.unit = m.unit; else delete x.unit; }
+      await this.saveChat(dataId, c); await this.refreshPanels(acl, dataId, c);
+      const v = this.stockCard(c, m); await this.edit(chatId, mid, v.text, v.kb); return ans('Unità: ' + unitOf(m)[1]);
+    }
     if (k === 'MRX') {   // tipo di ricetta: SSN → bianca → da banco (vale per tutte le righe con lo stesso nome)
       const nx = { ssn: 'bianca', bianca: 'banco', banco: 'ssn' }[rxOf(m)];
       for (const x of c.meds) if (x.name.toLowerCase() === m.name.toLowerCase()) { if (nx === 'ssn') delete x.rx; else x.rx = nx; }
@@ -2093,22 +2111,22 @@ export class Store {
       await this.saveChat(dataId, c);
       await this.refreshPanels(acl, dataId, c);
       if (isMirror) {   // dal messaggio "Da ordinare": avvisiamo anche il gruppo principale
-        await this.send(dataId, `☑️ <b>${esc(m.name)}</b> ritirato${who ? ' da ' + esc(who) : ''}: +${q} compresse (ora ${m.stock}).`, { inline_keyboard: [[{ text: `↩️ Annulla (−${q})`, callback_data: `SU|${m.id}|${q}` }]] });
-        return ans(`+${q} compresse`);
+        await this.send(dataId, `☑️ <b>${esc(m.name)}</b> ritirato${who ? ' da ' + esc(who) : ''}: +${un(m, q)} (ora ${m.stock}).`, { inline_keyboard: [[{ text: `↩️ Annulla (−${q})`, callback_data: `SU|${m.id}|${q}` }]] });
+        return ans(`+${un(m, q)}`);
       }
-      const v = this.stockCard(c, m, k === 'SA' ? `✅ Aggiunte ${q} compresse${who ? ' · ' + esc(who) : ''}.` : `↩️ Tolte ${q} compresse.`);
+      const v = this.stockCard(c, m, k === 'SA' ? `✅ Aggiunte ${un(m, q)}${who ? ' · ' + esc(who) : ''}.` : `↩️ Tolte ${un(m, q)}.`);
       if (k === 'SA') v.kb.inline_keyboard.unshift([{ text: `↩️ Annulla (−${q})`, callback_data: `SU|${m.id}|${q}` }]);
       await this.edit(chatId, mid, v.text, v.kb);
-      return ans(k === 'SA' ? `+${q} compresse` : 'Annullato');
+      return ans(k === 'SA' ? `+${un(m, q)}` : 'Annullato');
     }
     if (k === 'PK') {
       c.flows[uid] = { step: 'pack', d: { med: m.id } }; await this.saveChat(dataId, c);
-      await this.ask(chatId, `Quante compresse (o unità) ci sono in una confezione di <b>${esc(m.name)}</b>?${m.pack ? ` (ora: ${m.pack})` : ''}`, null, 'Es. 30');
+      await this.ask(chatId, `Quante ${unitOf(m)[1]} ci sono in una confezione di <b>${esc(m.name)}</b>?${m.pack ? ` (ora: ${m.pack})` : ''}`, null, 'Es. 30');
       return ans();
     }
     if (k === 'MS') {
       c.flows[uid] = { step: 'restock', d: { med: m.id } }; await this.saveChat(dataId, c);
-      await this.ask(chatId, `Giacenza di <b>${esc(m.name)}</b>: quante compresse avete adesso?${m.stock != null ? ` (ora: ${m.stock})` : ''}\nScrivi <b>-</b> per non contarle.`, null, 'Es. 30');
+      await this.ask(chatId, `Giacenza di <b>${esc(m.name)}</b>: quante ${unitOf(m)[1]} avete adesso?${m.stock != null ? ` (ora: ${m.stock})` : ''}\nScrivi <b>-</b> per non contarle.`, null, 'Es. 30');
       return ans();
     }
     if (k === 'MD') {
