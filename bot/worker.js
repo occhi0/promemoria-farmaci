@@ -314,6 +314,14 @@ export class Store {
     return Object.assign({ persons: [], meds: [], log: {}, sent: {}, snooze: [], flows: {} }, c);
   }
   saveChat(id, c) { return this.state.storage.put('c:' + id, c); }
+  // indice dei messaggi dei gruppi (id → topic), per pulire un topic senza toccare gli altri
+  async noteMsg(chat, id, thread) {
+    chat = String(chat); if (!chat.startsWith('-') || !id) return;
+    const k = 'mi:' + chat, L = (await this.state.storage.get(k)) || [];
+    L.push([id, thread || 0]); if (L.length > 1500) L.splice(0, L.length - 1500);
+    await this.state.storage.put(k, L);
+  }
+  async msgIndex(chat) { return (await this.state.storage.get('mi:' + String(chat))) || []; }
 
   /* ---------- Telegram ---------- */
   // Un gruppo normale diventato "supergruppo" cambia id: aggiorniamo tutti i riferimenti.
@@ -346,6 +354,7 @@ export class Store {
     const nid = r && !r.ok && r.parameters && r.parameters.migrate_to_chat_id;
     if (nid) { await this.migrateChat(chatId, nid); r = await tg(this.env, 'sendMessage', { ...body, chat_id: nid }); }
     if (r) r._chat = String(nid || chatId);
+    if (r && r.ok && r.result) await this.noteMsg(r._chat, r.result.message_id, r.result.is_topic_message ? r.result.message_thread_id : 0);
     return r;
   }
   edit(chatId, mid, text, markup) {
@@ -616,6 +625,7 @@ export class Store {
     this._sentLog = [];
     const m0 = up.message || (up.callback_query && up.callback_query.message);
     this._thread = m0 && m0.is_topic_message && m0.message_thread_id ? { chat: String(m0.chat.id), id: m0.message_thread_id } : null;
+    if (up.message && m0.chat && m0.chat.is_forum) await this.noteMsg(m0.chat.id, m0.message_id, m0.is_topic_message ? m0.message_thread_id : 0);
     if (up.message && m0.chat && m0.chat.type === 'supergroup' && m0.chat.is_forum === undefined) {   // gruppo semplice con i topic spenti: dimentichiamo i topic salvati
       const a0 = await this.acl(), id0 = String(m0.chat.id);
       if (a0.mirrors && a0.mirrors[id0] && ((a0.labThread || {})[id0] || (a0.home || {})[id0])) {
@@ -655,8 +665,30 @@ export class Store {
   }
   // /pulisci: cancella gli ultimi messaggi del gruppo (Telegram permette solo quelli delle ultime 48 ore),
   // tenendo i promemoria non ancora segnati e, nei gruppi semplici, pannello, terapia e "Da ordinare".
-  async purge(chatId, fromMid, c, keepExtra = []) {
+  async purge(chatId, fromMid, c, keepExtra = [], topic) {
     const keep = new Set(keepExtra.filter(Boolean));
+    if (topic !== undefined) {   // gruppo con i topic: si cancellano solo i messaggi di questo topic (quelli che il bot conosce)
+      const a = await this.acl();
+      for (const bag of ['home', 'labThread']) if (a[bag] && a[bag][chatId]) keep.add(a[bag][chatId]);
+      const S0 = (a.scr || {})[chatId]; if (S0 && S0.analisi) keep.add(S0.analisi);
+      for (const [date, byKey] of Object.entries(c.sent || {}))   // promemoria ancora da segnare: restano
+        for (const [key, S] of Object.entries(byKey)) if (!this.getLog(c, date, key)) (S.msgs || (S.m ? [[chatId, S.m]] : [])).forEach(([ch, m]) => { if (String(ch) === String(chatId)) keep.add(m); });
+      const idx = await this.msgIndex(chatId);
+      const ids = [...new Set(idx.filter(([id, th]) => th === topic && id !== topic && !keep.has(id) && id <= fromMid).map(([id]) => id))].sort((a, b) => b - a);
+      let bulkOk = 0, err = '', budget = 25;
+      const bulk = async part => {
+        if (!part.length || budget <= 0) return;
+        budget--;
+        const r = await tg(this.env, 'deleteMessages', { chat_id: chatId, message_ids: part });
+        if (r.ok) { bulkOk++; return; }
+        if (!err) err = r.description || 'errore sconosciuto';
+        if (part.length === 1) return;
+        const h = Math.ceil(part.length / 2); await bulk(part.slice(0, h)); await bulk(part.slice(h));
+      };
+      for (let i = 0; i < ids.length; i += 100) await bulk(ids.slice(i, i + 100));
+      const gone = new Set(ids); await this.state.storage.put('mi:' + String(chatId), idx.filter(([id]) => !gone.has(id)));
+      return { single: 0, bulkOk, err };
+    }
     const a = await this.acl();   // nei gruppi con i topic non tocchiamo il messaggio iniziale dei topic (cancellarlo può eliminare il topic)
     for (const bag of ['home', 'labThread']) if (a[bag] && a[bag][chatId]) keep.add(a[bag][chatId]);
     const P0 = (a.panels || {})[chatId]; if (P0 && P0.labs) keep.add(P0.labs);
@@ -854,11 +886,20 @@ export class Store {
         }
         case '/pulisci': {
           if (priv) return this.send(chatId, 'Questo comando si usa nei gruppi.');
-          const pr = await this.purge(chatId, msg.message_id + (msg._menu ? 200 : 0), c);
+          const a0f = await this.acl();
+          const forum = !!((msg.chat && msg.chat.is_forum) || this._thread || (a0f.home || {})[chatId] || (a0f.labThread || {})[chatId]);
+          const topic = forum ? (this._thread ? this._thread.id : 0) : undefined;
+          const pr = await this.purge(chatId, msg.message_id + (msg._menu ? 200 : 0), c, [], topic);
           const a1 = await this.acl();
           const keepA = ((a1.scr || {})[chatId] || {}).analisi;
-          for (const [t, m] of Object.entries((a1.scr || {})[chatId] || {})) if (t !== 'analisi') await this.del(chatId, m);   // via anche le schermate precedenti (l'elenco analisi resta)
-          if (a1.scr) a1.scr[chatId] = keepA ? { analisi: keepA } : {};
+          if (forum) {   // schermate: via solo quelle di questo topic
+            const th = new Map((await this.msgIndex(chatId)).map(([id, t]) => [id, t]));
+            const S1 = (a1.scr || {})[chatId] || {};
+            for (const [t, m] of Object.entries(S1)) if (t !== 'analisi' && (th.get(m) === topic || th.get(m) === undefined)) { await this.del(chatId, m); delete S1[t]; }
+          } else {
+            for (const [t, m] of Object.entries((a1.scr || {})[chatId] || {})) if (t !== 'analisi') await this.del(chatId, m);   // via anche le schermate precedenti (l'elenco analisi resta)
+            if (a1.scr) a1.scr[chatId] = keepA ? { analisi: keepA } : {};
+          }
           if (a1.fm) for (const k of Object.keys(a1.fm)) if (k.startsWith(chatId + ':')) delete a1.fm[k];
           await this.saveAcl(a1);
           if (this._thread && (a1.labThread || {})[chatId] === this._thread.id) {   // nel topic Analisi: dopo la pulizia rimettiamo l'elenco analisi, non Oggi
