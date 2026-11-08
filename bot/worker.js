@@ -241,6 +241,8 @@ const UNITS = { cp: ['compressa', 'compresse'], cps: ['capsula', 'capsule'], app
 const unitOf = m => UNITS[(m && m.unit) || 'cp'] || UNITS.cp;
 const un = (m, n) => `${n} ${unitOf(m)[n === 1 ? 0 : 1]}`;   // es. "20 applicazioni", "1 compressa"
 
+// nel menu a tendina di Telegram solo /menu: gli altri comandi sono pulsanti (e funzionano anche scritti a mano)
+const MENU_ONLY = [{ command: 'menu', description: '📋 Tutti i comandi' }];
 // pulsanti dei comandi, 2 per riga: "📅 Oggi", "🩺 Terapia"...
 function menuKb(list) {
   const b = list.filter(x => x.command !== 'menu').map(x => ({ text: `${x.description.split(' ')[0]} ${x.command[0].toUpperCase()}${x.command.slice(1)}`, callback_data: 'CM|' + x.command }));
@@ -263,7 +265,7 @@ export default {
         url: url.origin + '/webhook', secret_token: secret,
         allowed_updates: ['message', 'callback_query'], drop_pending_updates: true
       });
-      const c = await tg(env, 'setMyCommands', { commands: COMMANDS });
+      const c = await tg(env, 'setMyCommands', { commands: MENU_ONLY });
       await stub.fetch('https://store/cmds', { method: 'POST' });
       return Response.json({ ok: !!w.ok, bot: '@' + me.result.username, webhook: w, commands: c, ...(w.ok ? { messaggio: 'Tutto pronto! Apri il bot su Telegram e scrivi /start.' } : {}) }, { status: w.ok ? 200 : 500 });
     }
@@ -456,10 +458,10 @@ export class Store {
   // Menu dei comandi: completo in chat privata e nei gruppi principali, nessuno nei gruppi semplici.
   async syncCommands(acl) {
     await tg(this.env, 'deleteMyCommands', {});
-    await tg(this.env, 'setMyCommands', { commands: COMMANDS, scope: { type: 'all_private_chats' } });
-    for (const id of Object.keys(acl.chats)) if (id.startsWith('-')) await tg(this.env, 'setMyCommands', { commands: COMMANDS, scope: { type: 'chat', chat_id: Number(id) } });
-    for (const id of Object.keys(acl.mirrors || {})) await tg(this.env, 'setMyCommands', { commands: MIRROR_COMMANDS, scope: { type: 'chat', chat_id: Number(id) } });
-    acl.cmdv = 14; await this.saveAcl(acl);
+    await tg(this.env, 'setMyCommands', { commands: MENU_ONLY, scope: { type: 'all_private_chats' } });
+    for (const id of Object.keys(acl.chats)) if (id.startsWith('-')) await tg(this.env, 'setMyCommands', { commands: MENU_ONLY, scope: { type: 'chat', chat_id: Number(id) } });
+    for (const id of Object.keys(acl.mirrors || {})) await tg(this.env, 'setMyCommands', { commands: MENU_ONLY, scope: { type: 'chat', chat_id: Number(id) } });
+    acl.cmdv = 15; await this.saveAcl(acl);
   }
   // Pulsante fisso in basso (tastiera del bot). Senza "/" funziona solo se la privacy del bot nei gruppi è disattivata.
   async setBottomKb(acl, mc, force) {
@@ -532,7 +534,7 @@ export class Store {
   async tick(nowTs) {
     const n = romeParts(nowTs);
     const acl = await this.acl();
-    if (acl.admin && acl.cmdv !== 14) await this.syncCommands(acl);
+    if (acl.admin && acl.cmdv !== 15) await this.syncCommands(acl);
     if ((acl.wakes || []).some(w => w.at <= nowTs)) {
       for (const w of acl.wakes.filter(w => w.at <= nowTs)) {
         const txt = `🟢 <b>Lo studio è aperto</b> (fino alle ${w.until}).\nEcco la richiesta ${w.kind === 'lab' ? 'analisi' : 'ricette'} preparata${w.who ? ' da ' + esc(w.who) : ''}:\n\n${w.names.map(n => '• ' + esc(n)).join('\n')}\n\n👉 Tocca il pulsante qui sotto per inviarla${w.to ? ' a ' + esc(w.to) : ''} su WhatsApp.`;
@@ -753,7 +755,7 @@ export class Store {
         acl.mcv = acl.mcv || {}; acl.mcv[chatId] = 4; await this.saveAcl(acl);
         const rk = await this.send(chatId, '…', { remove_keyboard: true });   // toglie i vecchi pulsanti fissi
         if (rk.ok) await this.del(chatId, rk.result.message_id);
-        await tg(this.env, 'setMyCommands', { commands: MIRROR_COMMANDS, scope: { type: 'chat', chat_id: Number(chatId) } });
+        await tg(this.env, 'setMyCommands', { commands: MENU_ONLY, scope: { type: 'chat', chat_id: Number(chatId) } });
       }
       if (cmd === '/oggi') { const sc = await this.chat(src); await this.updatePanel(acl, chatId, sc, true); return this.updateOrders(acl, chatId, sc); }
       if (cmd === '/menu') {   // un solo messaggio menu: il precedente si cancella
@@ -798,7 +800,7 @@ export class Store {
     if (!acl.chats[chatId]) {
       if (priv || uid !== acl.admin || !cmd) { if (priv) await this.send(chatId, 'Questo è un bot privato.'); return; }
       acl.chats[chatId] = msg.chat.title || 'Gruppo'; await this.saveAcl(acl);
-      await tg(this.env, 'setMyCommands', { commands: COMMANDS, scope: { type: 'chat', chat_id: Number(chatId) } });
+      await tg(this.env, 'setMyCommands', { commands: MENU_ONLY, scope: { type: 'chat', chat_id: Number(chatId) } });
       await this.send(chatId, `👋 Gruppo <b>${esc(msg.chat.title || '')}</b> collegato!\n\nQui chiunque del gruppo può aggiungere farmaci, segnare le dosi e vedere lo storico. I promemoria dei farmaci inseriti qui arriveranno nel gruppo.\n\nPer spostare qui farmaci già inseriti nella tua chat privata: /trasferisci`);
       if (cmd === '/start') return;
     }
@@ -1694,7 +1696,7 @@ export class Store {
       acl.mirrors = acl.mirrors || {}; acl.mirrors[chatId] = src; delete acl.chats[chatId];
       await this.saveAcl(acl);
       acl.mcv = acl.mcv || {}; acl.mcv[chatId] = 4; await this.saveAcl(acl);
-      await tg(this.env, 'setMyCommands', { commands: MIRROR_COMMANDS, scope: { type: 'chat', chat_id: Number(chatId) } });
+      await tg(this.env, 'setMyCommands', { commands: MENU_ONLY, scope: { type: 'chat', chat_id: Number(chatId) } });
       await this.del(chatId, mid);
       const sc = await this.chat(src);
       await this.mirrorTherapy(acl, chatId, sc, acl.chats[src]);
