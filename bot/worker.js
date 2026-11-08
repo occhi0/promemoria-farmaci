@@ -208,6 +208,7 @@ Pulsante 💊 Al bisogno sotto il pannello Oggi: tocchi il farmaco e segno ora, 
 /pulisci – cancella i messaggi vecchi · /annulla – interrompe l'operazione in corso · /esporta – copia di sicurezza · /trasferisci – sposta farmaci tra gruppi`;
 
 const COMMANDS = [   // ordinati per uso: giorno per giorno, farmaci, controlli, analisi, servizio
+  { command: 'menu', description: '📋 Tutti i comandi come pulsanti' },
   { command: 'oggi', description: '📅 Dosi di oggi' },
   { command: 'terapia', description: '🩺 Terapia in corso, da mostrare al medico' },
   { command: 'scorte', description: '📦 Compresse rimaste e ricette' },
@@ -225,6 +226,7 @@ const COMMANDS = [   // ordinati per uso: giorno per giorno, farmaci, controlli,
 ];
 
 const MIRROR_COMMANDS = [   // menu del gruppo semplice: solo cose da guardare
+  { command: 'menu', description: '📋 Tutti i comandi come pulsanti' },
   { command: 'terapia', description: '🩺 Terapia in corso, anche da inviare su WhatsApp' },
   { command: 'ricette', description: '📤 Richiedi le ricette al medico' },
   { command: 'orari', description: '🕐 Orari dello studio medico' },
@@ -238,6 +240,13 @@ const rxOf = m => (m && m.rx) || 'ssn';
 const UNITS = { cp: ['compressa', 'compresse'], cps: ['capsula', 'capsule'], app: ['applicazione', 'applicazioni'], ero: ['erogazione', 'erogazioni'], bus: ['bustina', 'bustine'], fl: ['flacone', 'flaconi'], fia: ['fiala', 'fiale'], gtt: ['goccia', 'gocce'], dos: ['dose', 'dosi'] };
 const unitOf = m => UNITS[(m && m.unit) || 'cp'] || UNITS.cp;
 const un = (m, n) => `${n} ${unitOf(m)[n === 1 ? 0 : 1]}`;   // es. "20 applicazioni", "1 compressa"
+
+// pulsanti dei comandi, 2 per riga: "📅 Oggi", "🩺 Terapia"...
+function menuKb(list) {
+  const b = list.filter(x => x.command !== 'menu').map(x => ({ text: `${x.description.split(' ')[0]} ${x.command[0].toUpperCase()}${x.command.slice(1)}`, callback_data: 'CM|' + x.command }));
+  const rows = []; for (let i = 0; i < b.length; i += 2) rows.push(b.slice(i, i + 2));
+  return { inline_keyboard: rows };
+}
 
 export default {
   async fetch(req, env) {
@@ -450,7 +459,7 @@ export class Store {
     await tg(this.env, 'setMyCommands', { commands: COMMANDS, scope: { type: 'all_private_chats' } });
     for (const id of Object.keys(acl.chats)) if (id.startsWith('-')) await tg(this.env, 'setMyCommands', { commands: COMMANDS, scope: { type: 'chat', chat_id: Number(id) } });
     for (const id of Object.keys(acl.mirrors || {})) await tg(this.env, 'setMyCommands', { commands: MIRROR_COMMANDS, scope: { type: 'chat', chat_id: Number(id) } });
-    acl.cmdv = 13; await this.saveAcl(acl);
+    acl.cmdv = 14; await this.saveAcl(acl);
   }
   // Pulsante fisso in basso (tastiera del bot). Senza "/" funziona solo se la privacy del bot nei gruppi è disattivata.
   async setBottomKb(acl, mc, force) {
@@ -523,7 +532,7 @@ export class Store {
   async tick(nowTs) {
     const n = romeParts(nowTs);
     const acl = await this.acl();
-    if (acl.admin && acl.cmdv !== 13) await this.syncCommands(acl);
+    if (acl.admin && acl.cmdv !== 14) await this.syncCommands(acl);
     if ((acl.wakes || []).some(w => w.at <= nowTs)) {
       for (const w of acl.wakes.filter(w => w.at <= nowTs)) {
         const txt = `🟢 <b>Lo studio è aperto</b> (fino alle ${w.until}).\nEcco la richiesta ${w.kind === 'lab' ? 'analisi' : 'ricette'} preparata${w.who ? ' da ' + esc(w.who) : ''}:\n\n${w.names.map(n => '• ' + esc(n)).join('\n')}\n\n👉 Tocca il pulsante qui sotto per inviarla${w.to ? ' a ' + esc(w.to) : ''} su WhatsApp.`;
@@ -747,6 +756,13 @@ export class Store {
         await tg(this.env, 'setMyCommands', { commands: MIRROR_COMMANDS, scope: { type: 'chat', chat_id: Number(chatId) } });
       }
       if (cmd === '/oggi') { const sc = await this.chat(src); await this.updatePanel(acl, chatId, sc, true); return this.updateOrders(acl, chatId, sc); }
+      if (cmd === '/menu') {   // un solo messaggio menu: il precedente si cancella
+        acl.panels = acl.panels || {}; const P = acl.panels[chatId] = acl.panels[chatId] || {};
+        if (P.menu) await this.del(chatId, P.menu);
+        const rm = await this.send(chatId, '📋 <b>Comandi</b> — tocca un pulsante', menuKb(MIRROR_COMMANDS));
+        if (rm.ok) { P.menu = rm.result.message_id; await this.saveAcl(acl); }
+        return;
+      }
       if (cmd === '/terapia') return this.mirrorTherapy(acl, chatId, await this.chat(src), acl.chats[src], true);
       if (cmd === '/analisi' && this._thread) {   // scritto nel topic Analisi del gruppo semplice: lì compare l'elenco
         acl.labThread = acl.labThread || {}; acl.labThread[chatId] = this._thread.id; await this.saveAcl(acl);
@@ -796,6 +812,7 @@ export class Store {
         case '/annulla':
           delete c.flows[uid]; await this.saveChat(chatId, c);
           return this.send(chatId, 'Operazione annullata.', { remove_keyboard: true, selective: true });
+        case '/menu': return this.screen(chatId, 'menu', '📋 <b>Comandi</b> — tocca un pulsante', menuKb(COMMANDS));
         case '/oggi': {
           // /oggi scritto in un topic (non quello delle analisi) lo rende il topic dei farmaci: promemoria e pannelli arriveranno lì
           const a3 = await this.acl(), cur = (a3.home || {})[chatId] || null, lab = (a3.labThread || {})[chatId];
@@ -1695,7 +1712,7 @@ export class Store {
     const c = await this.chat(dataId);
     const [k, ...r] = data.split('|');
     const today = romeParts().date;
-    if (isMirror && !['T', 'S', 'Z', 'U', 'O', 'OR', 'TP', 'SA', 'OS', 'RQ', 'RT', 'RA', 'RS', 'RX', 'RW', 'RWo', 'RZ', 'LQ', 'LT', 'LW', 'LQX', 'SR', 'PB', 'PG', 'PW', 'PX', 'PR', 'PT', 'PD'].includes(k)) return ans();
+    if (isMirror && !['T', 'S', 'Z', 'U', 'O', 'OR', 'TP', 'SA', 'OS', 'RQ', 'RT', 'RA', 'RS', 'RX', 'RW', 'RWo', 'RZ', 'CM', 'LQ', 'LT', 'LW', 'LQX', 'SR', 'PB', 'PG', 'PW', 'PX', 'PR', 'PT', 'PD'].includes(k)) return ans();
 
     if (['T', 'S', 'Z', 'U', 'O'].includes(k)) {
       const [date, medId, time] = r;
@@ -1956,6 +1973,11 @@ export class Store {
       await this.saveChat(dataId, c);
       const v = this.reqView(c, uid, who, isMirror); await this.edit(chatId, mid, v.text, v.kb);
       return ans();
+    }
+    if (k === 'CM') {   // pulsante del menu: come se il comando fosse stato scritto
+      await ans();
+      const m0 = q.message;
+      return this.onUpdateInner({ message: { message_id: 0, from: q.from, chat: m0.chat, date: Math.floor(Date.now() / 1000), text: '/' + r[0], ...(m0.is_topic_message ? { is_topic_message: true, message_thread_id: m0.message_thread_id } : {}) } });
     }
     if (k === 'RZ') {   // ↺ Ricomincia: via la bozza, si riparte dai farmaci in esaurimento
       const fl2 = c.flows[uid]; if (!fl2 || !fl2.req) return ans();
