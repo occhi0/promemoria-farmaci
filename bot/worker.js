@@ -63,7 +63,8 @@ const STUDIO = {
   0: [], 1: [['16:30', '19:00']], 2: [['08:30', '10:30'], ['16:30', '18:30']], 3: [['08:30', '11:30']],
   4: [['16:30', '19:00']], 5: [['08:30', '11:30']], 6: []
 };
-const ORARI_BTN = '/orari 🕐 Orari studio';   // inizia con "/": arriva al bot anche con la privacy dei gruppi attiva
+const ORARI_BTN = '/orari 🕐 Orari studio';
+const MENU_BTN = '/menu 📋 Menu';   // pulsante fisso in basso, accanto al campo messaggio   // inizia con "/": arriva al bot anche con la privacy dei gruppi attiva
 const DOW_FULL = ['domenica', 'lunedì', 'martedì', 'mercoledì', 'giovedì', 'venerdì', 'sabato'];
 const hmShort = t => t.replace(/^0/, '');
 function studioLine(ts = Date.now()) {
@@ -475,9 +476,17 @@ export class Store {
   // Pulsante fisso in basso (tastiera del bot). Senza "/" funziona solo se la privacy del bot nei gruppi è disattivata.
   async setBottomKb(acl, mc, force) {
     acl.mcv = acl.mcv || {};
-    if (!force && (acl.mcv[mc] || 0) >= 8) return;
-    const r = await this.send(mc, '🕐 Pulsante degli orari dello studio attivato qui sotto.', { keyboard: [[{ text: ORARI_BTN }]], resize_keyboard: true, is_persistent: true });
-    if (r.ok) { acl.mcv[r._chat || mc] = 8; acl.temp = acl.temp || []; acl.temp.push({ chat: r._chat || String(mc), mid: r.result.message_id, at: Date.now() + 60e3 }); await this.saveAcl(acl); }
+    if (!force && (acl.mcv[mc] || 0) >= 9) return;
+    const r = await this.send(mc, '📋 Pulsanti Menu e Orari attivati qui sotto.', { keyboard: [[{ text: MENU_BTN }, { text: ORARI_BTN }]], resize_keyboard: true, is_persistent: true });
+    if (r.ok) { acl.mcv[r._chat || mc] = 9; acl.temp = acl.temp || []; acl.temp.push({ chat: r._chat || String(mc), mid: r.result.message_id, at: Date.now() + 60e3 }); await this.saveAcl(acl); }
+  }
+  // gruppo principale: pulsante fisso "📋 Menu" in basso, una volta per ogni topic
+  async setMainKb(acl, chatId) {
+    const key = chatId + ':' + (this._thread && String(this._thread.chat) === String(chatId) ? this._thread.id : 0);
+    acl.mkb = acl.mkb || {};
+    if (acl.mkb[key] === 1) return;
+    const r = await this.send(chatId, '📋 Pulsante Menu attivato qui sotto.', { keyboard: [[{ text: MENU_BTN }]], resize_keyboard: true, is_persistent: true });
+    if (r.ok) { acl.mkb[key] = 1; acl.temp = acl.temp || []; acl.temp.push({ chat: r._chat || String(chatId), mid: r.result.message_id, at: Date.now() + 60e3 }); await this.saveAcl(acl); }
   }
   async sendTemp(acl, mc, text, minutes) {
     const r = await this.send(mc, text);
@@ -843,6 +852,7 @@ export class Store {
 
     const c = await this.chat(chatId);
     if (cmd && !priv && !msg._menu) await this.del(chatId, msg.message_id);   // gruppo principale: via il comando scritto
+    if (cmd && !priv && acl.chats[chatId] !== undefined) await this.setMainKb(acl, chatId);
     if (cmd) {
       switch (cmd) {
         case '/start': case '/aiuto': case '/help': return this.send(chatId, HELP);
