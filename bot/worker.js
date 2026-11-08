@@ -818,7 +818,13 @@ export class Store {
         case '/annulla':
           delete c.flows[uid]; await this.saveChat(chatId, c);
           return this.send(chatId, 'Operazione annullata.', { remove_keyboard: true, selective: true });
-        case '/menu': return this.screen(chatId, 'menu', '📋 <b>Comandi</b> — tocca un pulsante', menuKb(COMMANDS));
+        case '/menu': {   // pulsanti diversi a seconda del topic: Analisi oppure Farmaci/Chat
+          const a4 = await this.acl(), lab = (a4.labThread || {})[chatId];
+          if (this._thread && lab && this._thread.id === lab) return this.screen(chatId, 'menuL', '📋 <b>Analisi</b> — tocca un pulsante', { inline_keyboard: [
+            [{ text: '🩸 Elenco analisi', callback_data: 'CM|analisi' }, { text: '📤 Richiedi analisi', callback_data: 'LQ' }],
+            [{ text: '🧹 Pulisci', callback_data: 'CM|pulisci' }, { text: '❓ Aiuto', callback_data: 'CM|aiuto' }]] });
+          return this.screen(chatId, 'menu', '📋 <b>Comandi</b> — tocca un pulsante', menuKb(COMMANDS.filter(x => x.command !== 'analisi')));
+        }
         case '/oggi': {
           // /oggi scritto in un topic (non quello delle analisi) lo rende il topic dei farmaci: promemoria e pannelli arriveranno lì
           const a3 = await this.acl(), cur = (a3.home || {})[chatId] || null, lab = (a3.labThread || {})[chatId];
