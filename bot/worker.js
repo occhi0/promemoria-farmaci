@@ -861,6 +861,11 @@ export class Store {
           if (a1.scr) a1.scr[chatId] = keepA ? { analisi: keepA } : {};
           if (a1.fm) for (const k of Object.keys(a1.fm)) if (k.startsWith(chatId + ':')) delete a1.fm[k];
           await this.saveAcl(a1);
+          if (this._thread && (a1.labThread || {})[chatId] === this._thread.id) {   // nel topic Analisi: dopo la pulizia rimettiamo l'elenco analisi, non Oggi
+            const lv = this.labsView(c);
+            if (keepA) { const e = await this.edit(chatId, keepA, lv.text, lv.kb); if (e.ok || /not modified/i.test(e.description || '')) return this.sendTemp(a1, chatId, '🧹 Pulito!', 1); }
+            return this.screen(chatId, 'analisi', lv.text, lv.kb);
+          }
           const v = this.todayView(c);
           return this.screen(chatId, 'oggi', '🧹 Pulito!\n\n' + v.text, v.kb);
         }
