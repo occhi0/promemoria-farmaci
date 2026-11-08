@@ -740,7 +740,7 @@ export class Store {
         if (fl0 && ['prn_new', 'prn_dose', 'prn_reason', 'prn_time'].includes(fl0.step)) return this.flowInput(src, sc0, uid, fl0, text, msg.message_id);
       }
       if (!cmd && text === ORARI_BTN) { await this.del(chatId, msg.message_id); return this.sendTemp(acl, chatId, studioTable(this.contact(await this.chat(acl.mirrors[chatId]))), 5); }
-      if (cmd) await this.del(chatId, msg.message_id);   // pagina pulita: via i comandi scritti
+      if (cmd && !msg._menu) await this.del(chatId, msg.message_id);   // pagina pulita: via i comandi scritti
       if (cmd === '/oggi') {   // /oggi scritto in un topic lo rende il topic dei promemoria (in General: si torna in General)
         const cur = (acl.home || {})[chatId] || null, want = this._thread && this._thread.id !== (acl.labThread || {})[chatId] ? this._thread.id : (this._thread ? cur : null);
         if (want !== cur) {
@@ -757,7 +757,11 @@ export class Store {
         if (rk.ok) await this.del(chatId, rk.result.message_id);
         await tg(this.env, 'setMyCommands', { commands: MENU_ONLY, scope: { type: 'chat', chat_id: Number(chatId) } });
       }
-      if (cmd === '/oggi') { const sc = await this.chat(src); await this.updatePanel(acl, chatId, sc, true); return this.updateOrders(acl, chatId, sc); }
+      if (cmd === '/oggi') {   // il pannello torna in fondo alla chat (e fissato)
+        const P = (acl.panels || {})[chatId];
+        if (P && P.oggi) { await this.del(chatId, P.oggi); delete P.oggi; delete P.pinned; await this.saveAcl(acl); }
+        const sc = await this.chat(src); await this.updatePanel(acl, chatId, sc, true); return this.updateOrders(acl, chatId, sc);
+      }
       if (cmd === '/menu') {   // un solo messaggio menu: il precedente si cancella
         acl.panels = acl.panels || {}; const P = acl.panels[chatId] = acl.panels[chatId] || {};
         if (P.menu) await this.del(chatId, P.menu);
@@ -774,7 +778,7 @@ export class Store {
       if (cmd === '/ricette') return this.onCallback({ id: '', from: msg.from, data: 'RQ', message: { message_id: 0, chat: msg.chat } });   // come il pulsante 📤 Ricette
       if (cmd === '/pulisci') {
         const sc = await this.chat(src); const P = (acl.panels || {})[chatId] || {};
-        const pr = await this.purge(chatId, msg.message_id, sc, [P.oggi, P.orders]);   // la Terapia si cancella: si riapre col pulsante 🩺
+        const pr = await this.purge(chatId, msg.message_id + (msg._menu ? 200 : 0), sc, [P.oggi, P.orders]);   // la Terapia si cancella: si riapre col pulsante 🩺
         if (P.terapia) { await this.del(chatId, P.terapia); delete P.terapia; }
         acl.temp = (acl.temp || []).filter(t => t.chat !== chatId); await this.saveAcl(acl);
         await this.updatePanel(acl, chatId, sc, true); await this.updateOrders(acl, chatId, sc); await this.refreshLabs(acl, src, sc);
@@ -806,7 +810,7 @@ export class Store {
     }
 
     const c = await this.chat(chatId);
-    if (cmd && !priv) await this.del(chatId, msg.message_id);   // gruppo principale: via il comando scritto
+    if (cmd && !priv && !msg._menu) await this.del(chatId, msg.message_id);   // gruppo principale: via il comando scritto
     if (cmd) {
       switch (cmd) {
         case '/start': case '/aiuto': case '/help': return this.send(chatId, HELP);
@@ -844,7 +848,7 @@ export class Store {
         }
         case '/pulisci': {
           if (priv) return this.send(chatId, 'Questo comando si usa nei gruppi.');
-          const pr = await this.purge(chatId, msg.message_id, c);
+          const pr = await this.purge(chatId, msg.message_id + (msg._menu ? 200 : 0), c);
           const a1 = await this.acl();
           const keepA = ((a1.scr || {})[chatId] || {}).analisi;
           for (const [t, m] of Object.entries((a1.scr || {})[chatId] || {})) if (t !== 'analisi') await this.del(chatId, m);   // via anche le schermate precedenti (l'elenco analisi resta)
@@ -1979,7 +1983,7 @@ export class Store {
     if (k === 'CM') {   // pulsante del menu: come se il comando fosse stato scritto
       await ans();
       const m0 = q.message;
-      return this.onUpdateInner({ message: { message_id: 0, from: q.from, chat: m0.chat, date: Math.floor(Date.now() / 1000), text: '/' + r[0], ...(m0.is_topic_message ? { is_topic_message: true, message_thread_id: m0.message_thread_id } : {}) } });
+      return this.onUpdateInner({ message: { message_id: m0.message_id, _menu: true, from: q.from, chat: m0.chat, date: Math.floor(Date.now() / 1000), text: '/' + r[0], ...(m0.is_topic_message ? { is_topic_message: true, message_thread_id: m0.message_thread_id } : {}) } });
     }
     if (k === 'RZ') {   // ↺ Ricomincia: via la bozza, si riparte dai farmaci in esaurimento
       const fl2 = c.flows[uid]; if (!fl2 || !fl2.req) return ans();
