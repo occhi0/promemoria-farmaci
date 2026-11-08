@@ -741,7 +741,7 @@ export class Store {
       }
       if (!cmd && text === ORARI_BTN) { await this.del(chatId, msg.message_id); return this.sendTemp(acl, chatId, studioTable(this.contact(await this.chat(acl.mirrors[chatId]))), 5); }
       if (cmd && !msg._menu) await this.del(chatId, msg.message_id);   // pagina pulita: via i comandi scritti
-      if (cmd === '/oggi') {   // /oggi scritto in un topic lo rende il topic dei promemoria (in General: si torna in General)
+      if (cmd === '/oggi' && !msg._menu) {   // /oggi scritto in un topic lo rende il topic dei promemoria (in General: si torna in General)
         const cur = (acl.home || {})[chatId] || null, want = this._thread && this._thread.id !== (acl.labThread || {})[chatId] ? this._thread.id : (this._thread ? cur : null);
         if (want !== cur) {
           acl.home = acl.home || {}; if (want) acl.home[chatId] = want; else delete acl.home[chatId];
@@ -770,7 +770,7 @@ export class Store {
         return;
       }
       if (cmd === '/terapia') return this.mirrorTherapy(acl, chatId, await this.chat(src), acl.chats[src], true);
-      if (cmd === '/analisi' && this._thread) {   // scritto nel topic Analisi del gruppo semplice: lì compare l'elenco
+      if (cmd === '/analisi' && this._thread && !msg._menu) {   // scritto nel topic Analisi del gruppo semplice: lì compare l'elenco
         acl.labThread = acl.labThread || {}; acl.labThread[chatId] = this._thread.id; await this.saveAcl(acl);
         return this.refreshLabs(acl, src, await this.chat(src), true);
       }
@@ -823,7 +823,7 @@ export class Store {
           // /oggi scritto in un topic (non quello delle analisi) lo rende il topic dei farmaci: promemoria e pannelli arriveranno lì
           const a3 = await this.acl(), cur = (a3.home || {})[chatId] || null, lab = (a3.labThread || {})[chatId];
           const want = this._thread && this._thread.id !== lab ? this._thread.id : (!this._thread ? null : cur);
-          if (chatId.startsWith('-') && want !== cur) { a3.home = a3.home || {}; if (want) a3.home[chatId] = want; else delete a3.home[chatId]; await this.saveAcl(a3); }
+          if (chatId.startsWith('-') && want !== cur && !msg._menu) { a3.home = a3.home || {}; if (want) a3.home[chatId] = want; else delete a3.home[chatId]; await this.saveAcl(a3); }
           const v = this.todayView(c); return this.screen(chatId, 'oggi', v.text, v.kb);
         }
         case '/farmaci': { const v = this.medsView(c); return this.screen(chatId, 'farmaci', v.text, v.kb); }
@@ -843,7 +843,7 @@ export class Store {
         case '/saltate': return this.screen(chatId, 'saltate', this.skippedView(c));
         case '/bisogno': return this.screen(chatId, 'bisogno', this.prnHistory(c));
         case '/analisi': {
-          if (this._thread) { const a2 = await this.acl(); a2.labThread = a2.labThread || {}; a2.labThread[chatId] = this._thread.id; await this.saveAcl(a2); }
+          if (this._thread && !msg._menu) { const a2 = await this.acl(); a2.labThread = a2.labThread || {}; a2.labThread[chatId] = this._thread.id; await this.saveAcl(a2); }
           return this.showLabs(chatId, c);
         }
         case '/pulisci': {
