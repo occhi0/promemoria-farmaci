@@ -213,6 +213,7 @@ const COMMANDS = [   // ordinati per uso: giorno per giorno, farmaci, controlli,
   { command: 'oggi', description: '📅 Dosi di oggi' },
   { command: 'terapia', description: '🩺 Terapia in corso, da mostrare al medico' },
   { command: 'scorte', description: '📦 Compresse rimaste e ricette' },
+  { command: 'orari', description: '🕐 Orari dello studio medico' },
   { command: 'farmaci', description: '💊 Elenco farmaci: modifica, pausa, archivio' },
   { command: 'aggiungi', description: '➕ Nuovo farmaco (anche al bisogno)' },
   { command: 'storico', description: '🗂 Terapie a tempo, in corso e concluse' },
@@ -860,11 +861,13 @@ export class Store {
         case '/annulla':
           delete c.flows[uid]; await this.saveChat(chatId, c);
           return this.send(chatId, 'Operazione annullata.', { remove_keyboard: true, selective: true });
+        case '/orari': return this.sendTemp(acl, chatId, studioTable(this.contact(c)), 5);   // come nel gruppo semplice: si cancella da solo
         case '/menu': {   // pulsanti diversi a seconda del topic: Analisi oppure Farmaci/Chat
           const a4 = await this.acl(), lab = (a4.labThread || {})[chatId];
           if (this._thread && lab && this._thread.id === lab) return this.screen(chatId, 'menuL', '📋 <b>Analisi</b> — tocca un pulsante', { inline_keyboard: [
             [{ text: '🩸 Elenco analisi', callback_data: 'CM|analisi' }, { text: '📤 Richiedi analisi', callback_data: 'LQ' }],
-            [{ text: '🧹 Pulisci', callback_data: 'CM|pulisci' }, { text: '❓ Aiuto', callback_data: 'CM|aiuto' }]] });
+            [{ text: '🕐 Orari studio', callback_data: 'CM|orari' }, { text: '🧹 Pulisci', callback_data: 'CM|pulisci' }],
+            [{ text: '❓ Aiuto', callback_data: 'CM|aiuto' }]] });
           return this.screen(chatId, 'menu', '📋 <b>Comandi</b> — tocca un pulsante', menuKb(COMMANDS.filter(x => x.command !== 'analisi')));
         }
         case '/oggi': {
