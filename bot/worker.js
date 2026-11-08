@@ -476,9 +476,10 @@ export class Store {
   // Pulsante fisso in basso (tastiera del bot). Senza "/" funziona solo se la privacy del bot nei gruppi è disattivata.
   async setBottomKb(acl, mc, force) {
     acl.mcv = acl.mcv || {};
-    if (!force && (acl.mcv[mc] || 0) >= 9) return;
-    const r = await this.send(mc, '📋 Pulsanti Menu e Orari attivati qui sotto.', { keyboard: [[{ text: MENU_BTN }, { text: ORARI_BTN }]], resize_keyboard: true, is_persistent: true });
-    if (r.ok) { acl.mcv[r._chat || mc] = 9; acl.temp = acl.temp || []; acl.temp.push({ chat: r._chat || String(mc), mid: r.result.message_id, at: Date.now() + 60e3 }); await this.saveAcl(acl); }
+    if (!force && (acl.mcv[mc] || 0) >= 10) return;
+    // niente più pulsanti fissi in basso: basta il quadratino "/" che apre /menu. Togliamo la vecchia tastiera.
+    const r = await this.send(mc, '…', { remove_keyboard: true });
+    if (r.ok) { acl.mcv[r._chat || mc] = 10; await this.del(r._chat || mc, r.result.message_id); await this.saveAcl(acl); }
   }
   // gruppo principale: pulsante fisso "📋 Menu" in basso, una volta per ogni topic
   async setMainKb(acl, chatId) {
@@ -852,7 +853,6 @@ export class Store {
 
     const c = await this.chat(chatId);
     if (cmd && !priv && !msg._menu) await this.del(chatId, msg.message_id);   // gruppo principale: via il comando scritto
-    if (cmd && !priv && acl.chats[chatId] !== undefined) await this.setMainKb(acl, chatId);
     if (cmd) {
       switch (cmd) {
         case '/start': case '/aiuto': case '/help': return this.send(chatId, HELP);
