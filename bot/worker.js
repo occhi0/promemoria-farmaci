@@ -1079,17 +1079,20 @@ export class Store {
       case 'pfrom': {
         const m = c.meds.find(x => x.id === d.med); const today = romeParts().date;
         if (!m) { delete c.flows[uid]; await save(); return this.send(chatId, 'Il farmaco non esiste più.'); }
-        const f = parseDate(text, today);
-        if (!f || f <= today) return this.ask(chatId, 'Scrivi un giorno futuro: una data (es. <code>8/11</code>) oppure <code>tra 4 giorni</code>.', mid, 'Es. 8/11');
+        let f = /^\s*oggi\s*$/i.test(text) ? today : parseDate(text, today);
+        if (f && f > today && !/\d{4}/.test(text) && /\d/.test(text) && f > addDays(today, 300).date) f = `${+f.slice(0, 4) - 1}${f.slice(4)}`;
+        if (!f || f < addDays(today, -60).date) return this.ask(chatId, 'Scrivi il <b>primo giorno</b> con i nuovi orari: una data (es. <code>9/11</code>), <code>oggi</code> oppure <code>tra 4 giorni</code>.', mid, 'Es. 9/11');
         d.from = f; fl.step = 'ptimes'; await save();
-        return this.ask(chatId, `Dal <b>${fmtDate(f)}</b>, a che ore? Scrivi tutti i nuovi orari, es. <code>8 14 20</code>.`, mid, 'Es. 8 14 20');
+        return this.ask(chatId, `${f <= today ? 'Da' : 'Dal'} <b>${f === today ? 'oggi' : fmtDate(f)}</b>, a che ore? Scrivi tutti i nuovi orari, es. <code>8 14 20</code>.`, mid, 'Es. 8 14 20');
       }
       case 'ptimes': {
         const m = c.meds.find(x => x.id === d.med);
         if (!m) { delete c.flows[uid]; await save(); return this.send(chatId, 'Il farmaco non esiste più.'); }
         const t = parseTimes(text);
         if (!t) return this.ask(chatId, 'Non ho capito gli orari 🤔 Riprova, ad esempio <code>8 14 20</code>.', mid, 'Es. 8 14 20');
-        m.plan = (m.plan || []).filter(p => p.from !== d.from); m.plan.push({ from: d.from, times: t });
+        if (d.from <= romeParts().date) {   // cambio già in vigore (oggi o giorni passati): diventano gli orari attuali
+          m.times = t; m.plan = (m.plan || []).filter(p => p.from > romeParts().date);
+        } else { m.plan = (m.plan || []).filter(p => p.from !== d.from); m.plan.push({ from: d.from, times: t }); }
         m.plan.sort((a, b) => a.from < b.from ? -1 : 1);
         delete c.flows[uid]; await save();
         const v = this.planView(c, m);
@@ -1238,7 +1241,7 @@ export class Store {
         if (isForever(text) || isSkip(text)) m.end = '';
         else {
           const e = parseDate(text.replace(/^(?:fino\s+al?|al)\s+/i, ''), today);
-          if (!e || e < today) return this.ask(chatId, 'Scrivi l\'ultimo giorno di terapia (es. <code>11/11</code>), oppure <b>-</b> per toglierlo (terapia cronica).', mid, 'Es. 11/11');
+          if (!e || e < addDays(today, -60).date) return this.ask(chatId, 'Scrivi l\'ultimo giorno di terapia (es. <code>8/11</code>, anche già passato), oppure <b>-</b> per toglierlo (terapia cronica).', mid, 'Es. 8/11');
           m.end = e;
         }
         delete m.endNotified; delete m.archived;
@@ -2204,7 +2207,7 @@ export class Store {
     if (k === 'MT') { const v = this.planView(c, m); await this.edit(chatId, mid, v.text, v.kb); return ans(); }
     if (k === 'MTC') {
       c.flows[uid] = { step: 'pfrom', d: { med: m.id } }; await this.saveChat(dataId, c);
-      await this.ask(chatId, `Da quale giorno cambiano gli orari di <b>${esc(m.name)}</b>?\nScrivi una data (es. <code>8/11</code>) oppure <code>tra 4 giorni</code>.`, null, 'Es. 8/11');
+      await this.ask(chatId, `Qual è il <b>primo giorno</b> con i nuovi orari di <b>${esc(m.name)}</b>?\nScrivi una data (es. <code>9/11</code>), <code>oggi</code> oppure <code>tra 4 giorni</code>. Va bene anche un giorno già passato.`, null, 'Es. 9/11');
       return ans();
     }
     if (k === 'MTE') {
