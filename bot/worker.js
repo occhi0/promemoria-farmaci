@@ -102,13 +102,27 @@ function nextOpening(ts = Date.now()) {   // { ts, label: "martedì alle 8:30", 
   }
   return null;
 }
-function studioTable(ct) {
+// numeri da chiamare col telefono (scritti nel messaggio: toccandoli Telegram propone di chiamare)
+function phonesText(ph) {
+  ph = ph || {};
+  const L = [];
+  if (ph.studio) L.push(`📞 Studio: ${esc(ph.studio)} <i>(solo a studio aperto)</i>`);
+  if (ph.doc) L.push(`📞 Dottore: ${esc(ph.doc)}`);
+  return L.length ? '\n' + L.join('\n') + '\n' : '';
+}
+function normPhone(t) {
+  let d = t.replace(/[^\d+]/g, '');
+  if (!d.startsWith('+')) d = '+39' + d.replace(/^0039/, '');
+  const n = d.replace(/^\+39/, '');
+  return d.startsWith('+39') ? `+39 ${n.slice(0, 3)} ${n.slice(3)}` : d;
+}
+function studioTable(ct, ph) {
   const fmt = sl => sl ? `${hmShort(sl[0])}–${hmShort(sl[1])}` : '—';
   const row = (lbl, d) => {
     const am = STUDIO[d].find(x => toMin(x[0]) < 13 * 60), pm = STUDIO[d].find(x => toMin(x[0]) >= 13 * 60);
     return `${lbl.padEnd(4)}${fmt(am).padEnd(12)}${fmt(pm)}`;
   };
-  return `🕐 <b>Orari dello studio medico</b>\n${studioLine()}\n\n<pre>    Mattina     Pomeriggio\n${[['Lun', 1], ['Mar', 2], ['Mer', 3], ['Gio', 4], ['Ven', 5]].map(([l, d]) => row(l, d)).join('\n')}\nSab e Dom: chiuso</pre>\n<i>Questo messaggio si cancella da solo tra 5 minuti.</i>`;
+  return `🕐 <b>Orari dello studio medico</b>\n${studioLine()}\n\n<pre>    Mattina     Pomeriggio\n${[['Lun', 1], ['Mar', 2], ['Mer', 3], ['Gio', 4], ['Ven', 5]].map(([l, d]) => row(l, d)).join('\n')}\nSab e Dom: chiuso</pre>${phonesText(ph)}\n<i>Questo messaggio si cancella da solo tra 5 minuti.</i>`;
 }
 const MONTHS = { gen: 1, feb: 2, mar: 3, apr: 4, mag: 5, giu: 6, lug: 7, ago: 8, set: 9, ott: 10, nov: 11, dic: 12 };
 // Capisce: oggi, domani, "tra 5 giorni", "9/11", "9/11/2026", "9 novembre"
@@ -782,7 +796,7 @@ export class Store {
         if (fl0 && fl0.step === 'skip_reason') return this.skipReason(src, sc0, uid, fl0, text, msg.message_id, chatId);
         if (fl0 && ['prn_new', 'prn_dose', 'prn_reason', 'prn_time'].includes(fl0.step)) return this.flowInput(src, sc0, uid, fl0, text, msg.message_id);
       }
-      if (!cmd && text === ORARI_BTN) { await this.del(chatId, msg.message_id); return this.sendTemp(acl, chatId, studioTable(this.contact(await this.chat(acl.mirrors[chatId]))), 5); }
+      if (!cmd && text === ORARI_BTN) { await this.del(chatId, msg.message_id); const sc1 = await this.chat(acl.mirrors[chatId]); return this.sendTemp(acl, chatId, studioTable(this.contact(sc1), sc1.phones), 5); }
       if (cmd && !msg._menu) await this.del(chatId, msg.message_id);   // pagina pulita: via i comandi scritti
       if (cmd === '/oggi' && !msg._menu) {   // /oggi scritto in un topic lo rende il topic dei promemoria (in General: si torna in General)
         const cur = (acl.home || {})[chatId] || null, want = this._thread && this._thread.id !== (acl.labThread || {})[chatId] ? this._thread.id : (this._thread ? cur : null);
@@ -817,7 +831,7 @@ export class Store {
         acl.labThread = acl.labThread || {}; acl.labThread[chatId] = this._thread.id; await this.saveAcl(acl);
         return this.refreshLabs(acl, src, await this.chat(src), true);
       }
-      if (cmd === '/orari') return this.sendTemp(acl, chatId, studioTable(this.contact(await this.chat(src))), 5);
+      if (cmd === '/orari') { const sc1 = await this.chat(src); return this.sendTemp(acl, chatId, studioTable(this.contact(sc1), sc1.phones), 5); }
       if (cmd === '/ricette') return this.onCallback({ id: '', from: msg.from, data: 'RQ', message: { message_id: 0, chat: msg.chat } });   // come il pulsante 📤 Ricette
       if (cmd === '/pulisci') {
         const sc = await this.chat(src); const P = (acl.panels || {})[chatId] || {};
@@ -861,7 +875,11 @@ export class Store {
         case '/annulla':
           delete c.flows[uid]; await this.saveChat(chatId, c);
           return this.send(chatId, 'Operazione annullata.', { remove_keyboard: true, selective: true });
-        case '/orari': return this.sendTemp(acl, chatId, studioTable(this.contact(c)), 5);   // come nel gruppo semplice: si cancella da solo
+        case '/orari': {   // si cancella da solo dopo 5 minuti; qui c'è anche ✏️ per i numeri
+          const ro = await this.send(chatId, studioTable(this.contact(c), c.phones), { inline_keyboard: [[{ text: '✏️ Numeri di telefono', callback_data: 'PH' }]] });
+          if (ro.ok) { acl.temp = acl.temp || []; acl.temp.push({ chat: ro._chat || chatId, mid: ro.result.message_id, at: Date.now() + 5 * 60e3 }); await this.saveAcl(acl); }
+          return;
+        }
         case '/menu': {   // pulsanti diversi a seconda del topic: Analisi oppure Farmaci/Chat
           const a4 = await this.acl(), lab = (a4.labThread || {})[chatId];
           if (this._thread && lab && this._thread.id === lab) return this.screen(chatId, 'menuL', '📋 <b>Analisi</b> — tocca un pulsante', { inline_keyboard: [
@@ -1092,6 +1110,19 @@ export class Store {
         const o = { id: rid(), person: (c.persons[0] || {}).id, name: d.name, dose: isSkip(text) ? '' : text.trim().slice(0, 40) };
         c.occ.push(o); delete c.flows[uid];
         return this.prnGive(await this.acl(), chatId, c, d.view, o, d.who);
+      }
+      case 'ph_studio': case 'ph_doc': {
+        c.phones = c.phones || {};
+        const key = fl.step === 'ph_studio' ? 'studio' : 'doc', t = text.trim();
+        if (/^no$/i.test(t)) delete c.phones[key];
+        else if (!isSkip(t)) { if (t.replace(/\D/g, '').length < 6) return this.ask(chatId, 'Scrivi il numero, ad esempio <code>376 2869219</code>, oppure <b>-</b>.', mid, 'Telefono'); c.phones[key] = normPhone(t); }
+        await this.del(chatId, mid);   // via dalla chat il messaggio con il numero
+        if (fl.step === 'ph_studio') {
+          fl.step = 'ph_doc'; await save();
+          return this.ask(chatId, `📞 Numero <b>diretto del dottore</b>?${c.phones.doc ? '\nOra: ' + esc(c.phones.doc) : ''}\nScrivi <b>-</b> per lasciarlo com'è, <b>no</b> per toglierlo.`, null, 'Es. 333 1234567');
+        }
+        delete c.flows[uid]; await save();
+        return this.sendTemp(await this.acl(), chatId, '✅ Numeri salvati. Li trovi negli 🕐 Orari, in tutti e due i gruppi.' + phonesText(c.phones), 2);
       }
       case 'prn_time': {   // "14:30", "ieri 21:00", "4/11 21:00", "4/11/2026 21:00"
         const today = romeParts().date;
@@ -2049,6 +2080,13 @@ export class Store {
       await ans();
       const m0 = q.message;
       return this.onUpdateInner({ message: { message_id: m0.message_id, _menu: true, from: q.from, chat: m0.chat, date: Math.floor(Date.now() / 1000), text: '/' + r[0], ...(m0.is_topic_message ? { is_topic_message: true, message_thread_id: m0.message_thread_id } : {}) } });
+    }
+    if (k === 'PH') {   // numeri da chiamare: studio e dottore
+      if (isMirror) return ans();
+      c.flows[uid] = { step: 'ph_studio', d: {} }; await this.saveChat(dataId, c);
+      const ph = c.phones || {};
+      await this.ask(chatId, `📞 Numero dello <b>studio</b> (solo a studio aperto)?${ph.studio ? '\nOra: ' + esc(ph.studio) : ''}\nScrivi <b>-</b> per lasciarlo com'è, <b>no</b> per toglierlo.`, null, 'Es. 376 2869219');
+      return ans();
     }
     if (k === 'RZ') {   // ↺ Ricomincia: via la bozza, si riparte dai farmaci in esaurimento
       const fl2 = c.flows[uid]; if (!fl2 || !fl2.req) return ans();
