@@ -1676,7 +1676,7 @@ export class Store {
       if (!studioOpen()) kb.push([{ text: '⏰ Ricordamelo all\'apertura', callback_data: 'RW' }, { text: '📤 Invia comunque', url: this.waUrl(p, wa) }]);
       else kb.push([{ text: `📤 Invia${info.to ? ' a ' + info.to : ''} su WhatsApp (${chosen.length})`.slice(0, 60), url: this.waUrl(p, wa) }]);
     }
-    if (!mirror && !info.tel) kb.push([{ text: `📞 Numero di ${info.to || 'segreteria'} (per WhatsApp)`.slice(0, 60), callback_data: 'RN|' + p.id }]);
+    if (!mirror) kb.push([{ text: (info.tel ? '📞 Cambia numero WhatsApp' : `📞 Numero di ${info.to || 'segreteria'} (per WhatsApp)`).slice(0, 60), callback_data: 'RN|' + p.id }]);
     kb.push(mirror ? [{ text: 'Chiudi', callback_data: 'RX' }] : [{ text: '✏️ Dati assistita', callback_data: 'RI|' + p.id }, { text: 'Chiudi', callback_data: 'RX' }]);
     return { text, kb: { inline_keyboard: kb } };
   }
