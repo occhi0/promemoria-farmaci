@@ -527,9 +527,19 @@ export class Store {
     S.msgs = S.msgs.filter(([ch]) => !mset.has(String(ch)));
   }
   // Pannello "Oggi" fissato in alto nel gruppo semplice: un solo messaggio, sempre aggiornato
+  // Telegram non lascia cancellare ai bot i messaggi più vecchi di 48 ore: in quel caso lo svuotiamo e lo sganciamo
+  async retireMsg(mc, mid) {
+    const d = await this.del(mc, mid);
+    if (d && d.ok) return;
+    await tg(this.env, 'editMessageText', { chat_id: mc, message_id: mid, text: '⬇️ Il pannello di oggi è più in basso.', reply_markup: { inline_keyboard: [] } });
+    await tg(this.env, 'unpinChatMessage', { chat_id: mc, message_id: mid });
+  }
   async updatePanel(acl, mc, c, force) {
     acl.panels = acl.panels || {}; const P = acl.panels[mc] = acl.panels[mc] || {};
     const v = this.todayView(c, true);
+    if (P.oggi && P.day && P.day !== romeParts().date) {   // giorno nuovo: pannello nuovo (così resta sempre cancellabile), senza suono
+      await this.retireMsg(mc, P.oggi); delete P.oggi; delete P.pinned;
+    }
     if (P.oggi) {
       const r = await this.edit(mc, P.oggi, v.text, v.kb);
       if (r.ok || /not modified/i.test(r.description || '')) {
@@ -540,7 +550,7 @@ export class Store {
         return;
       }
     }
-    const r = await this.send(mc, v.text, v.kb);
+    const r = await this.send(mc, v.text, v.kb, { disable_notification: true });
     if (r.ok) {
       P.oggi = r.result.message_id; P.day = romeParts().date;
       const pr = await tg(this.env, 'pinChatMessage', { chat_id: r._chat || mc, message_id: P.oggi, disable_notification: true });
@@ -816,7 +826,7 @@ export class Store {
       }
       if (cmd === '/oggi') {   // il pannello torna in fondo alla chat (e fissato)
         const P = (acl.panels || {})[chatId];
-        if (P && P.oggi) { await this.del(chatId, P.oggi); delete P.oggi; delete P.pinned; await this.saveAcl(acl); }
+        if (P && P.oggi) { await this.retireMsg(chatId, P.oggi); delete P.oggi; delete P.pinned; await this.saveAcl(acl); }
         const sc = await this.chat(src); await this.updatePanel(acl, chatId, sc, true); return this.updateOrders(acl, chatId, sc);
       }
       if (cmd === '/menu') {   // un solo messaggio menu: il precedente si cancella
