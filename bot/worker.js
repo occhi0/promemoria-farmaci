@@ -1697,10 +1697,10 @@ export class Store {
     return {
       text: this.medText(c, m), kb: {
         inline_keyboard: [
-          [{ text: '✏️ Nome', callback_data: 'ME|' + m.id + '|name' }, { text: '✏️ Dose', callback_data: 'ME|' + m.id + '|dose' }, { text: '🕐 Orari', callback_data: 'ME|' + m.id + '|times' }, { text: '📝 Note', callback_data: 'ME|' + m.id + '|notes' }],
+          [{ text: '✏️ Nome', callback_data: 'ME|' + m.id + '|name' }, { text: '✏️ Dose', callback_data: 'ME|' + m.id + '|dose' }, { text: '🕐 Orari', callback_data: 'ME|' + m.id + '|times' }],
           [...(c.persons.length > 1 ? [{ text: '👤 Chi', callback_data: 'MW|' + m.id }] : []), { text: m.paused ? '▶️ Riprendi' : '⏸ Pausa', callback_data: 'MP|' + m.id }, { text: '📦 Scorte', callback_data: 'SK|' + m.id }],
           [{ text: '📅 Giorni', callback_data: 'MG|' + m.id }, { text: '📆 Programma', callback_data: 'MT|' + m.id }, this.ended(m, romeParts().date) ? { text: '♻️ Riattiva', callback_data: 'MR|' + m.id } : { text: '🗂 Archivia', callback_data: 'MA|' + m.id }],
-          [{ text: RX_LABEL[rxOf(m)] + ' ↻', callback_data: 'MRX|' + m.id }],
+          [{ text: '📝 Note', callback_data: 'ME|' + m.id + '|notes' }, { text: RX_LABEL[rxOf(m)] + ' ↻', callback_data: 'MRX|' + m.id }],
           [{ text: '🗑 Elimina', callback_data: 'MD|' + m.id }, { text: '⬅️ Elenco', callback_data: 'ML' }]
         ]
       }
