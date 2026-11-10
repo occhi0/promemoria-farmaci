@@ -1680,7 +1680,7 @@ export class Store {
         inline_keyboard: [
           [{ text: '✏️ Nome', callback_data: 'ME|' + m.id + '|name' }, { text: '✏️ Dose', callback_data: 'ME|' + m.id + '|dose' }, { text: '🕐 Orari', callback_data: 'ME|' + m.id + '|times' }],
           [...(c.persons.length > 1 ? [{ text: '👤 Chi', callback_data: 'MW|' + m.id }] : []), { text: m.paused ? '▶️ Riprendi' : '⏸ Pausa', callback_data: 'MP|' + m.id }, { text: '📦 Scorte', callback_data: 'SK|' + m.id }],
-          [{ text: '📆 Programma', callback_data: 'MT|' + m.id }, this.ended(m, romeParts().date) ? { text: '♻️ Riattiva', callback_data: 'MR|' + m.id } : { text: '🗂 Archivia', callback_data: 'MA|' + m.id }],
+          [{ text: '📅 Giorni', callback_data: 'MG|' + m.id }, { text: '📆 Programma', callback_data: 'MT|' + m.id }, this.ended(m, romeParts().date) ? { text: '♻️ Riattiva', callback_data: 'MR|' + m.id } : { text: '🗂 Archivia', callback_data: 'MA|' + m.id }],
           [{ text: RX_LABEL[rxOf(m)] + ' ↻', callback_data: 'MRX|' + m.id }],
           [{ text: '🗑 Elimina', callback_data: 'MD|' + m.id }, { text: '⬅️ Elenco', callback_data: 'ML' }]
         ]
@@ -2267,8 +2267,22 @@ export class Store {
     if (k === 'MC') { const v = this.doneView(c); await this.edit(chatId, mid, v.text, v.kb); return ans(); }
     if (k === 'ML') { const v = this.medsView(c); await this.edit(chatId, mid, v.text, v.kb); return ans(); }
     const m = c.meds.find(x => x.id === r[0]);
-    if (['MM', 'MP', 'MS', 'MD', 'MDY', 'ME', 'MW', 'MWP', 'MWN', 'MT', 'MTC', 'MTE', 'MTX', 'MTS', 'MA', 'MAY', 'MR', 'SK', 'SA', 'SU', 'PK', 'MRX', 'MU', 'MUS'].includes(k) && !m) { const v = this.medsView(c); await this.edit(chatId, mid, v.text, v.kb); return ans('Farmaco non trovato'); }
+    if (['MM', 'MP', 'MS', 'MD', 'MDY', 'ME', 'MW', 'MWP', 'MWN', 'MT', 'MTC', 'MTE', 'MTX', 'MTS', 'MA', 'MAY', 'MR', 'SK', 'SA', 'SU', 'PK', 'MRX', 'MU', 'MUS', 'MG', 'MGT', 'MGA'].includes(k) && !m) { const v = this.medsView(c); await this.edit(chatId, mid, v.text, v.kb); return ans('Farmaco non trovato'); }
     if (k === 'MM') { const v = this.medDetail(c, m); await this.edit(chatId, mid, v.text, v.kb); return ans(); }
+    if (k === 'MG' || k === 'MGT' || k === 'MGA') {   // giorni della settimana: tutti, oppure solo alcuni
+      if (k === 'MGA') m.days = [];
+      if (k === 'MGT') {
+        const dd = Number(r[1]); let ds = m.days.length ? [...m.days] : [0, 1, 2, 3, 4, 5, 6];
+        ds = ds.includes(dd) ? ds.filter(x => x !== dd) : [...ds, dd];
+        m.days = ds.length === 7 || !ds.length ? [] : ds.sort((a, b) => ((a + 6) % 7) - ((b + 6) % 7));
+      }
+      if (k !== 'MG') { await this.saveChat(dataId, c); await this.refreshPanels(acl, dataId, c); }
+      const on = d => !m.days.length || m.days.includes(d);
+      const rows = [[1, 2, 3, 4].map(d => ({ text: `${on(d) ? '✅' : '⬜'} ${DOW_SHORT[d]}`, callback_data: `MGT|${m.id}|${d}` })), [5, 6, 0].map(d => ({ text: `${on(d) ? '✅' : '⬜'} ${DOW_SHORT[d]}`, callback_data: `MGT|${m.id}|${d}` }))];
+      rows.push([{ text: (m.days.length ? '' : '✅ ') + 'Tutti i giorni', callback_data: 'MGA|' + m.id }, { text: '⬅️ Fatto', callback_data: 'MM|' + m.id }]);
+      await this.edit(chatId, mid, `📅 <b>${esc(m.name)}</b>: in quali giorni si prende?\nOra: <b>${daysText(m.days)}</b>\nTocca i giorni per accenderli o spegnerli.`, { inline_keyboard: rows });
+      return ans(k === 'MG' ? '' : daysText(m.days));
+    }
     if (k === 'MU') {   // scelta dell'unità di conteggio
       const kb = Object.entries(UNITS).map(([u, [, pl]]) => ({ text: `${(m.unit || 'cp') === u ? '✅ ' : ''}${pl}`, callback_data: `MUS|${m.id}|${u}` }));
       const rows = []; for (let i = 0; i < kb.length; i += 3) rows.push(kb.slice(i, i + 3));
