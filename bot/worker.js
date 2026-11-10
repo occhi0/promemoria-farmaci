@@ -1370,7 +1370,9 @@ export class Store {
       const slots = {};
       for (const m of active.filter(x => x.person === pid)) {
         const times = this.timesOn(m, n.date).length ? this.timesOn(m, n.date) : m.times;
-        const extra = [m.days.length && m.days.length < 7 && !m.end ? 'solo ' + daysText(m.days) : '', m.end ? 'fino al ' + short(m.end) : '', (m.start && m.start > n.date) ? 'dal ' + short(m.start) : '', m.notes || ''].filter(Boolean).join(', ');
+        const fut = m.start && m.start > n.date;
+        const period = fut && m.end ? `dal ${short(m.start)} al ${short(m.end)}` : m.end ? 'fino al ' + short(m.end) : fut ? 'dal ' + short(m.start) : '';
+        const extra = [m.days.length && m.days.length < 7 && !m.end ? 'solo ' + daysText(m.days) : '', period, m.notes || ''].filter(Boolean).join(', ');
         for (const hm of times) (slots[hm] = slots[hm] || []).push(`*${m.name}*${m.dose ? ' ' + m.dose : ''}${extra ? ' (' + extra + ')' : ''}`);
       }
       t += '\n';
