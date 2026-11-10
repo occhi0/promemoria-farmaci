@@ -257,6 +257,33 @@ const UNITS = { cp: ['compressa', 'compresse'], cps: ['capsula', 'capsule'], app
 const unitOf = m => UNITS[(m && m.unit) || 'cp'] || UNITS.cp;
 const un = (m, n) => `${n} ${unitOf(m)[n === 1 ? 0 : 1]}`;   // es. "20 applicazioni", "1 compressa"
 
+// pagina per stampare la terapia: il testo viaggia nel "#" del link, quindi non passa dal server
+const PRINT_PAGE = String.raw`<!doctype html><html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Terapia</title>
+<meta name="robots" content="noindex"><style>
+body{font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#111;max-width:720px;margin:24px auto;padding:0 18px}
+h1{font-size:22px;margin:0 0 2px}.sub{color:#555;margin:0 0 18px}ul{padding-left:20px;margin:6px 0 14px}li{margin:4px 0}
+h2{font-size:17px;margin:18px 0 4px}.bar{position:sticky;top:0;background:#fff;padding:10px 0;margin-bottom:10px;border-bottom:1px solid #ddd}
+button{font:600 17px system-ui;padding:12px 18px;border-radius:10px;border:0;background:#1f6f43;color:#fff}.hint{color:#666;font-size:13px;margin-top:6px}
+@media print{.bar{display:none}body{margin:0}}</style></head><body>
+<div class="bar"><button onclick="window.print()">🖨 Stampa o salva in PDF</button><div class="hint">Se non si apre la stampa: menu ⋮ → «Apri in Chrome», poi di nuovo il pulsante.</div></div>
+<div id="out"></div>
+<script>
+(function(){try{
+var h=location.hash.slice(1).replace(/-/g,'+').replace(/_/g,'/');while(h.length%4)h+='=';
+var t=decodeURIComponent(escape(atob(h)));
+var e=function(x){return x.replace(/[&<>]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;'}[c]})};
+var b=function(x){return e(x).replace(/\*(.+?)\*/g,'<b>$1</b>')};
+var L=t.split('\n'),o='',inl=false,first=true;
+for(var i=0;i<L.length;i++){var l=L[i].trim();
+ if(!l){if(inl){o+='</ul>';inl=false}continue}
+ if(l.indexOf('• ')===0){if(!inl){o+='<ul>';inl=true}o+='<li>'+b(l.slice(2))+'</li>';continue}
+ if(inl){o+='</ul>';inl=false}
+ if(first){o+='<h1>'+e(l.replace(/^\W+\s*/,'').replace(/\*/g,''))+'</h1>';first=false;continue}
+ if(/^Aggiornat/.test(l)){o+='<p class="sub">'+e(l)+'</p>';continue}
+ o+='<h2>'+e(l.replace(/\*/g,''))+'</h2>'}
+if(inl)o+='</ul>';document.getElementById('out').innerHTML=o;document.title=(L[0]||'Terapia').replace(/^\W+\s*/,'').replace(/\*/g,'');
+}catch(err){document.getElementById('out').textContent='Pagina non valida: riapri il pulsante Stampa dal bot.'}})();
+</script></body></html>`;
 // nel menu a tendina di Telegram solo /menu: gli altri comandi sono pulsanti (e funzionano anche scritti a mano)
 const MENU_ONLY = [{ command: 'menu', description: '📋 Tutti i comandi' }];
 // pulsanti dei comandi, 2 per riga: "📅 Oggi", "🩺 Terapia"...
@@ -287,11 +314,12 @@ export default {
     }
     if (url.pathname === '/webhook' && req.method === 'POST') {
       if (req.headers.get('X-Telegram-Bot-Api-Secret-Token') !== await webhookSecret(env)) return new Response('forbidden', { status: 403 });
-      return stub.fetch('https://store/update', { method: 'POST', body: await req.text() });
+      return stub.fetch('https://store/update', { method: 'POST', body: await req.text(), headers: { 'x-origin': url.origin } });
     }
     if (url.pathname === '/tick' && env.TG_API) { // solo per i test locali
       return stub.fetch('https://store/tick', { method: 'POST', body: url.searchParams.get('now') || '' });
     }
+    if (url.pathname === '/stampa') return new Response(PRINT_PAGE, { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' } });
     return new Response('Promemoria farmaci: bot attivo.');
   },
   async scheduled(ev, env, ctx) {
@@ -312,8 +340,13 @@ export class Store {
     const path = new URL(req.url).pathname;
     this._acl = null;   // un solo oggetto acl per richiesta (così le migrazioni non vengono sovrascritte)
     try {
+      if (!this._origin) this._origin = await this.state.storage.get('origin');
       if (path === '/tick') { const t = await req.text(); await this.tick(t ? Number(t) : Date.now()); }
-      else if (path === '/update') await this.onUpdate(await req.json());
+      else if (path === '/update') {
+        const og = req.headers.get('x-origin');
+        if (og && og !== this._origin) { this._origin = og; if ((await this.state.storage.get('origin')) !== og) await this.state.storage.put('origin', og); }
+        await this.onUpdate(await req.json());
+      }
       else if (path === '/cmds') { const a = await this.acl(); if (a.admin) await this.syncCommands(a); }
     } catch (e) { console.log('errore', e && e.stack || e); }
     return new Response('ok');
@@ -1315,8 +1348,10 @@ export class Store {
     const url = 'https://wa.me/?text=' + encodeURIComponent(plain);
     const row = [];
     if (c.meds.length && url.length <= 4000) row.push({ text: '📤 WhatsApp', url });
-    row.push(cron ? { text: '🩺 Tutta la terapia', callback_data: 'TC|0' } : { text: '♾️ Solo cronica', callback_data: 'TC|1' });
-    return { text, kb: { inline_keyboard: [row] }, long: c.meds.length && url.length > 4000 };
+    const b64 = btoa(unescape(encodeURIComponent(plain))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    if (c.meds.length && this._origin && b64.length < 6000) row.push({ text: '🖨 Stampa', url: this._origin + '/stampa#' + b64 });
+    const kb = [row, [cron ? { text: '🩺 Tutta la terapia', callback_data: 'TC|0' } : { text: '♾️ Solo cronica', callback_data: 'TC|1' }]];
+    return { text, kb: { inline_keyboard: kb }, long: c.meds.length && url.length > 4000 };
   }
   async sendTherapy(chatId, c, title) {
     const { text, kb, long } = this.therapyMsg(c, title);
