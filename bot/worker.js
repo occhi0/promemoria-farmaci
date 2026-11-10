@@ -1341,20 +1341,49 @@ export class Store {
     return `<b>${esc(m.name)}</b>${m.dose ? ' ' + esc(m.dose) : ''}${m.paused ? ' ⏸ <i>in pausa</i>' : ''}${this.multi(c) ? '\n👤 ' + esc(this.person(c, m.person)) : ''}\n🕐 ${m.times.join(', ')} · ${daysText(m.days)}${m.stock != null ? `\n📦 ${un(m, m.stock)}` : ''}\n${RX_LABEL[rxOf(m)]}` + extra;
   }
   // cron = solo terapia cronica (senza data di fine, niente al bisogno)
-  therapyMsg(c, title, cron) {
+  // testo semplice (per la pagina di stampa) con i farmaci di oggi in ordine di orario
+  scheduleText(c) {
+    const n = romeParts();
+    const active = c.meds.filter(m => !m.paused && !this.ended(m, n.date));
+    const [y, mo, d] = n.date.split('-').map(Number);
+    const dateLong = new Date(Date.UTC(y, mo - 1, d)).toLocaleDateString('it-IT', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
+    const persons = [...new Set(active.map(m => m.person))];
+    const short = dt => { const [, mm, dd] = dt.split('-').map(Number); return `${dd}/${mm}`; };
+    let t = `🕐 *Orari dei farmaci*${persons.length === 1 ? ' — ' + this.person(c, persons[0]) : ''}\nAggiornata al ${dateLong}\n`;
+    for (const pid of persons) {
+      if (persons.length > 1) t += `\n*${this.person(c, pid)}*\n`;
+      const slots = {};
+      for (const m of active.filter(x => x.person === pid)) {
+        const times = this.timesOn(m, n.date).length ? this.timesOn(m, n.date) : m.times;
+        const extra = [m.days.length && m.days.length < 7 ? 'solo ' + daysText(m.days) : '', m.end ? 'fino al ' + short(m.end) : '', (m.start && m.start > n.date) ? 'dal ' + short(m.start) : ''].filter(Boolean).join(', ');
+        for (const hm of times) (slots[hm] = slots[hm] || []).push(`• *${m.name}*${m.dose ? ' ' + m.dose : ''}${extra ? ' (' + extra + ')' : ''}`);
+      }
+      for (const hm of Object.keys(slots).sort()) t += `\n${hm}\n` + slots[hm].join('\n') + '\n';
+      const occ = (c.occ || []).filter(o => o.person === pid);
+      if (occ.length) t += `\nAl bisogno\n` + occ.map(o => `• *${o.name}*${o.dose ? ' ' + o.dose : ''}`).join('\n') + '\n';
+    }
+    return t;
+  }
+  printUrl(plain) {
+    const b64 = btoa(unescape(encodeURIComponent(plain))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    return this._origin && b64.length < 6000 ? this._origin + '/stampa#' + b64 : null;
+  }
+  therapyMsg(c, title, cron, main) {
     const text = this.therapyView(c, title, cron);
     // versione per WhatsApp: *grassetto* al posto dei tag HTML
     const plain = text.replace(/<b>(.*?)<\/b>/g, '*$1*').replace(/<[^>]+>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
     const url = 'https://wa.me/?text=' + encodeURIComponent(plain);
     const row = [];
     if (c.meds.length && url.length <= 4000) row.push({ text: '📤 WhatsApp', url });
-    const b64 = btoa(unescape(encodeURIComponent(plain))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-    if (c.meds.length && this._origin && b64.length < 6000) row.push({ text: '🖨 Stampa', url: this._origin + '/stampa#' + b64 });
+    const pu = c.meds.length ? this.printUrl(plain) : null;
+    if (pu) row.push({ text: '🖨 Stampa', url: pu });
     const kb = [row, [cron ? { text: '🩺 Tutta la terapia', callback_data: 'TC|0' } : { text: '♾️ Solo cronica', callback_data: 'TC|1' }]];
+    const su = main && c.meds.length ? this.printUrl(this.scheduleText(c)) : null;   // solo nel gruppo principale
+    if (su) kb[1].push({ text: '🕐 Stampa con orari', url: su });
     return { text, kb: { inline_keyboard: kb }, long: c.meds.length && url.length > 4000 };
   }
   async sendTherapy(chatId, c, title) {
-    const { text, kb, long } = this.therapyMsg(c, title);
+    const { text, kb, long } = this.therapyMsg(c, title, false, true);
     await this.screen(chatId, 'terapia', text, kb);
     if (long) await this.send(chatId, "L'elenco è troppo lungo per il pulsante WhatsApp: tieni premuto il messaggio, tocca Copia e incollalo in WhatsApp.");
   }
@@ -1974,7 +2003,7 @@ export class Store {
     }
     if (k === 'OS' && isMirror) { await this.sendTemp(acl, realId, studioTable(this.contact(c)), 5); return ans('Orari qui sotto 👇'); }
     if (k === 'TC') {   // alterna: tutta la terapia ↔ solo cronica
-      const v = this.therapyMsg(c, acl.chats[dataId], r[0] === '1');
+      const v = this.therapyMsg(c, acl.chats[dataId], r[0] === '1', !isMirror);
       await this.edit(isMirror ? realId : chatId, mid, v.text, v.kb); return ans(r[0] === '1' ? 'Solo terapia cronica' : 'Tutta la terapia');
     }
     if (k === 'TP' && isMirror) { await this.setBottomKb(acl, realId); await this.mirrorTherapy(acl, realId, c, acl.chats[dataId], true); return ans('Terapia qui sotto 👇'); }
