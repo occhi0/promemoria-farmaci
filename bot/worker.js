@@ -545,6 +545,10 @@ export class Store {
       if (r.ok || /not modified/i.test(r.description || '')) {
         let dirty = false;
         if (P.day !== romeParts().date) { P.day = romeParts().date; dirty = true; }
+        if (force && P.pinned) {   // con 🔄 Aggiorna o /oggi controlliamo che sia davvero fissato
+          const gc = await tg(this.env, 'getChat', { chat_id: mc });
+          if (gc.ok && (!gc.result.pinned_message || gc.result.pinned_message.message_id !== P.oggi)) P.pinned = false;
+        }
         if (!P.pinned) { const pr = await tg(this.env, 'pinChatMessage', { chat_id: mc, message_id: P.oggi, disable_notification: true }); if (pr.ok) { P.pinned = true; dirty = true; } }
         if (dirty) await this.saveAcl(acl);
         return;
