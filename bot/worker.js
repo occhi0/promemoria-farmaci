@@ -1307,20 +1307,21 @@ export class Store {
     const extra = (next ? `\n🔁 dal ${fmtDate(next.from)}: ${next.times.join(', ')}` : '') + (m.end ? `\n🏁 ${this.ended(m, today) ? 'terminata il' : 'fino al'} ${fmtDate(m.end)}` : '');
     return `<b>${esc(m.name)}</b>${m.dose ? ' ' + esc(m.dose) : ''}${m.paused ? ' ⏸ <i>in pausa</i>' : ''}${this.multi(c) ? '\n👤 ' + esc(this.person(c, m.person)) : ''}\n🕐 ${m.times.join(', ')} · ${daysText(m.days)}${m.stock != null ? `\n📦 ${un(m, m.stock)}` : ''}\n${RX_LABEL[rxOf(m)]}` + extra;
   }
-  therapyMsg(c, title) {
-    const text = this.therapyView(c, title);
+  // cron = solo terapia cronica (senza data di fine, niente al bisogno)
+  therapyMsg(c, title, cron) {
+    const text = this.therapyView(c, title, cron);
+    // versione per WhatsApp: *grassetto* al posto dei tag HTML
     const plain = text.replace(/<b>(.*?)<\/b>/g, '*$1*').replace(/<[^>]+>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
     const url = 'https://wa.me/?text=' + encodeURIComponent(plain);
-    return { text, kb: c.meds.length && url.length <= 4000 ? { inline_keyboard: [[{ text: '📤 Invia su WhatsApp', url }]] } : undefined };
+    const row = [];
+    if (c.meds.length && url.length <= 4000) row.push({ text: '📤 WhatsApp', url });
+    row.push(cron ? { text: '🩺 Tutta la terapia', callback_data: 'TC|0' } : { text: '♾️ Solo cronica', callback_data: 'TC|1' });
+    return { text, kb: { inline_keyboard: [row] }, long: c.meds.length && url.length > 4000 };
   }
   async sendTherapy(chatId, c, title) {
-    const t = this.therapyView(c, title);
-    // versione per WhatsApp: *grassetto* al posto dei tag HTML
-    const plain = t.replace(/<b>(.*?)<\/b>/g, '*$1*').replace(/<[^>]+>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
-    const url = 'https://wa.me/?text=' + encodeURIComponent(plain);
-    const ok = c.meds.length && url.length <= 4000;
-    await this.screen(chatId, 'terapia', t, ok ? { inline_keyboard: [[{ text: '📤 Invia su WhatsApp', url }]] } : undefined);
-    if (c.meds.length && !ok) await this.send(chatId, "L'elenco è troppo lungo per il pulsante WhatsApp: tieni premuto il messaggio, tocca Copia e incollalo in WhatsApp.");
+    const { text, kb, long } = this.therapyMsg(c, title);
+    await this.screen(chatId, 'terapia', text, kb);
+    if (long) await this.send(chatId, "L'elenco è troppo lungo per il pulsante WhatsApp: tieni premuto il messaggio, tocca Copia e incollalo in WhatsApp.");
   }
   // Copia completa di sicurezza: tutto quello che serve per reinserire i farmaci.
   exportView(c, title) {
@@ -1341,16 +1342,17 @@ export class Store {
     return t + '\nInoltra questo messaggio ai tuoi Messaggi salvati: se un giorno dovessi reinserire i farmaci, qui trovi tutto.';
   }
   // Elenco della terapia in corso, da mostrare al medico: niente scorte, niente farmaci in pausa o terminati.
-  therapyView(c, title) {
+  therapyView(c, title, cron) {
     const n = romeParts();
-    const active = c.meds.filter(m => !m.paused && !this.ended(m, n.date));
-    if (!active.length && !(c.occ || []).length) return 'Non ci sono terapie in corso.';
+    const active = c.meds.filter(m => !m.paused && !this.ended(m, n.date) && (!cron || !m.end));
+    if (cron) c = { ...c, occ: [] };
+    if (!active.length && !(c.occ || []).length) return cron ? 'Non ci sono farmaci in terapia cronica.' : 'Non ci sono terapie in corso.';
     const freq = k => k === 1 ? '1 volta al giorno' : `${k} volte al giorno`;
     const hh = ts => ts.map(t => t.endsWith(':00') ? String(+t.slice(0, 2)) : t.replace(/^0/, '')).join(', ');
     const [y, mo, d] = n.date.split('-').map(Number);
     const dateLong = new Date(Date.UTC(y, mo - 1, d)).toLocaleDateString('it-IT', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
     const persons = [...new Set([...active.map(m => m.person), ...(c.occ || []).map(o => o.person)])];
-    let t = `🩺 <b>Terapia in corso</b>${persons.length === 1 ? ' — ' + esc(this.person(c, persons[0])) : ''}\nAggiornata al ${dateLong}\n`;
+    let t = `🩺 <b>${cron ? 'Terapia cronica' : 'Terapia in corso'}</b>${persons.length === 1 ? ' — ' + esc(this.person(c, persons[0])) : ''}\nAggiornata al ${dateLong}\n`;
     for (const pid of persons) {
       if (persons.length > 1) t += `\n<b>${esc(this.person(c, pid))}</b>`;
       const ms = active.filter(m => m.person === pid).sort((a, b) => a.name.localeCompare(b.name, 'it', { sensitivity: 'base' }) || ((a.since || a.start || '') < (b.since || b.start || '') ? -1 : (a.since || a.start || '') > (b.since || b.start || '') ? 1 : 0));
@@ -1831,7 +1833,7 @@ export class Store {
     const c = await this.chat(dataId);
     const [k, ...r] = data.split('|');
     const today = romeParts().date;
-    if (isMirror && !['T', 'S', 'Z', 'U', 'O', 'OR', 'TP', 'SA', 'OS', 'RQ', 'RT', 'RA', 'RS', 'RX', 'RW', 'RWo', 'RZ', 'CM', 'LQ', 'LT', 'LW', 'LQX', 'SR', 'PB', 'PG', 'PW', 'PX', 'PR', 'PT', 'PD'].includes(k)) return ans();
+    if (isMirror && !['T', 'S', 'Z', 'U', 'O', 'OR', 'TP', 'TC', 'SA', 'OS', 'RQ', 'RT', 'RA', 'RS', 'RX', 'RW', 'RWo', 'RZ', 'CM', 'LQ', 'LT', 'LW', 'LQX', 'SR', 'PB', 'PG', 'PW', 'PX', 'PR', 'PT', 'PD'].includes(k)) return ans();
 
     if (['T', 'S', 'Z', 'U', 'O'].includes(k)) {
       const [date, medId, time] = r;
@@ -1936,6 +1938,10 @@ export class Store {
       return ans(M[x] ? 'Motivo: ' + M[x] : 'Ok');
     }
     if (k === 'OS' && isMirror) { await this.sendTemp(acl, realId, studioTable(this.contact(c)), 5); return ans('Orari qui sotto 👇'); }
+    if (k === 'TC') {   // alterna: tutta la terapia ↔ solo cronica
+      const v = this.therapyMsg(c, acl.chats[dataId], r[0] === '1');
+      await this.edit(isMirror ? realId : chatId, mid, v.text, v.kb); return ans(r[0] === '1' ? 'Solo terapia cronica' : 'Tutta la terapia');
+    }
     if (k === 'TP' && isMirror) { await this.setBottomKb(acl, realId); await this.mirrorTherapy(acl, realId, c, acl.chats[dataId], true); return ans('Terapia qui sotto 👇'); }
     if (k === 'OR' && isMirror) {
       if (realId !== chatId) await this.del(chatId, mid);   // pannello vecchio: lo togliamo
