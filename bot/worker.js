@@ -1628,14 +1628,20 @@ export class Store {
     const act = c.meds.filter(m => !this.ended(m, today));
     if (!act.length) return { text: 'Non ci sono farmaci in corso. Usa /aggiungi per inserirne uno.', kb: doneBtn.length ? { inline_keyboard: doneBtn } : undefined };
     const order = id => c.persons.findIndex(p => p.id === id);
-    const ms = [...act].sort((a, b) => order(a.person) - order(b.person) || a.name.localeCompare(b.name));
+    const st = m => m.since || m.start || '';
+    const ms = [...act].sort((a, b) => order(a.person) - order(b.person) || a.name.localeCompare(b.name) || (st(a) < st(b) ? -1 : st(a) > st(b) ? 1 : 0));
+    const short = dt => { const [, mm, dd] = dt.split('-').map(Number); return `${dd}/${mm}`; };
+    // periodo e giorni, così le righe dello stesso farmaco (es. dosi a scalare) si riconoscono
+    const when = m => [m.end ? `${st(m) ? short(st(m)) : ''}→${short(m.end)}` : (m.start > today ? 'dal ' + short(m.start) : ''), m.days.length && m.days.length < 7 ? daysText(m.days) : ''].filter(Boolean).join(' · ');
     let text = '💊 <b>Farmaci</b>\n', last = null;
     for (const m of ms) {
       if (m.person !== last) { text += this.multi(c) ? `\n👤 <b>${esc(this.person(c, m.person))}</b>\n` : '\n'; last = m.person; }
-      text += `• ${esc(m.name)}${m.dose ? ' ' + esc(m.dose) : ''} — ${m.times.join(', ')}${m.paused ? ' ⏸' : ''}\n`;
+      const w = when(m);
+      text += `• ${esc(m.name)}${m.dose ? ' ' + esc(m.dose) : ''} — ${m.times.join(', ')}${w ? ' <i>(' + esc(w) + ')</i>' : ''}${m.paused ? ' ⏸' : ''}\n`;
     }
     text += '\nTocca un farmaco per modificarlo:';
-    return { text, kb: { inline_keyboard: [...ms.map(m => [{ text: `${m.paused ? '⏸ ' : ''}${m.name}${this.pdot(c, m.person, true)}`.slice(0, 60), callback_data: 'MM|' + m.id }]), ...doneBtn] } };
+    const twin = m => ms.filter(x => x.name.toLowerCase() === m.name.toLowerCase()).length > 1;
+    return { text, kb: { inline_keyboard: [...ms.map(m => [{ text: `${m.paused ? '⏸ ' : ''}${m.name}${twin(m) && when(m) ? ' · ' + when(m) : ''}${this.pdot(c, m.person, true)}`.slice(0, 60), callback_data: 'MM|' + m.id }]), ...doneBtn] } };
   }
   doneView(c) {
     const today = romeParts().date;
