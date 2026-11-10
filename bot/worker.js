@@ -508,7 +508,7 @@ export class Store {
     if (!Object.keys(c.log[date]).length) delete c.log[date];
   }
   doseText(c, m, date, time, today) {
-    return `💊 ${this.multi(c) ? '<b>' + esc(this.person(c, m.person)) + '</b> · ' + esc(m.name) : '<b>' + esc(m.name) + '</b>'}${m.dose ? ' ' + esc(m.dose) : ''}\n🕐 Ore ${time}${today && date !== today ? ' di ' + fmtDate(date) : ''}`;
+    return `💊 ${this.multi(c) ? '<b>' + esc(this.person(c, m.person)) + '</b> · ' + esc(m.name) : '<b>' + esc(m.name) + '</b>'}${m.dose ? ' ' + esc(m.dose) : ''}\n🕐 Ore ${time}${today && date !== today ? ' di ' + fmtDate(date) : ''}${m.notes ? '\n📝 ' + esc(m.notes) : ''}`;
   }
   doseKb(date, id, time) {
     const d = `${date}|${id}|${time}`;
@@ -1067,9 +1067,9 @@ export class Store {
         if (/\d/.test(text)) { // ha scritto delle date: è il periodo, e il farmaco va preso tutti i giorni
           const pr = parsePeriod(text, today);
           if (pr) {
-            d.days = []; d.start = pr.start; d.end = pr.end; fl.step = 'stock'; await save();
+            d.days = []; d.start = pr.start; d.end = pr.end; fl.step = 'notes'; await save();
             await this.fsend(chatId, `Ho capito: <b>tutti i giorni</b>, dal <b>${fmtDate(pr.start)}</b> al <b>${fmtDate(pr.end)}</b>.`);
-            return this.askStock(chatId, mid);
+            return this.askNotes(chatId, mid);
           }
         }
         const ds = parseDays(text);
@@ -1085,15 +1085,26 @@ export class Store {
           if (!pr) return this.ask(chatId, 'Non ho capito il periodo 🤔 Scrivi ad esempio <code>dal 3/11 al 7/11</code>, oppure il numero di giorni (<code>7</code>), oppure <b>-</b> se è cronica.', mid, 'Es. dal 3/11 al 7/11');
           d.start = pr.start; d.end = pr.end;
         }
-        fl.step = 'stock'; await save();
+        fl.step = 'notes'; await save();
         if (d.end) await this.fsend(chatId, `📆 Periodo: dal <b>${fmtDate(d.start)}</b> al <b>${fmtDate(d.end)}</b>`);
+        return this.askNotes(chatId, mid);
+      }
+      case 'occ_note': {
+        const o = (c.occ || []).find(x => x.id === d.id);
+        if (o) { if (isSkip(text)) delete o.notes; else o.notes = text.trim().slice(0, 120); }
+        delete c.flows[uid]; await save();
+        return this.send(chatId, o ? `✅ Nota ${o.notes ? 'salvata' : 'tolta'} per <b>${esc(o.name)}</b>.` : 'Farmaco non trovato.');
+      }
+      case 'notes': {
+        d.notes = isSkip(text) ? '' : text.trim().slice(0, 120);
+        fl.step = 'stock'; await save();
         return this.askStock(chatId, mid);
       }
       case 'stock': {
         let st = null;
         if (!isSkip(text)) { st = firstNum(text); if (isNaN(st) || st < 0) return this.ask(chatId, 'Scrivi solo il numero di compresse che hai, ad esempio <code>28</code>. Per saltare, scrivi <b>-</b> oppure <b>salta</b>.', mid, 'Es. 28'); }
         const today = romeParts().date;
-        const m = { id: rid(), person: d.person, name: d.name, dose: d.dose || '', times: d.times, days: d.days || [], qty: 1, stock: st, since: d.start || '', start: d.start && d.start > today ? d.start : today, end: d.end || '', paused: false, lowLevel: null };
+        const m = { id: rid(), person: d.person, name: d.name, dose: d.dose || '', times: d.times, days: d.days || [], qty: 1, stock: st, since: d.start || '', start: d.start && d.start > today ? d.start : today, end: d.end || '', paused: false, lowLevel: null, ...(d.notes ? { notes: d.notes } : {}) };
         c.meds.push(m);
         if (st != null) {   // chiediamo subito quante compresse ci sono in una confezione
           c.flows[uid] = { step: 'pack', d: { med: m.id, fromAdd: true } }; await save();
@@ -1303,6 +1314,7 @@ export class Store {
         if (!m) { delete c.flows[uid]; await save(); return this.send(chatId, 'Il farmaco non esiste più.'); }
         if (d.field === 'name') m.name = text.slice(0, 60);
         else if (d.field === 'dose') m.dose = isSkip(text) ? '' : text.slice(0, 40);
+        else if (d.field === 'notes') { if (isSkip(text)) delete m.notes; else m.notes = text.trim().slice(0, 120); }
         else if (d.field === 'times') {
           const t = parseTimes(text);
           if (!t) return this.ask(chatId, 'Non ho capito gli orari 🤔 Riprova, ad esempio <code>8 20</code> oppure <code>07:30 19:30</code>.', mid, 'Es. 8 20');
@@ -1332,6 +1344,7 @@ export class Store {
   askDur(chatId, mid) {
     return this.ask(chatId, 'Periodo di terapia?\nScrivi <code>dal 3/11 al 7/11</code>, oppure il numero di giorni (es. <code>7</code>).\nSe è una terapia <b>cronica</b>, scrivi <b>-</b>', mid, 'Es. dal 3/11 al 7/11 oppure -');
   }
+  askNotes(chatId, mid) { return this.ask(chatId, '📝 Una <b>nota</b> per questo farmaco? Ad esempio <i>a stomaco pieno</i>, <i>prima di colazione</i>, <i>sciogliere in acqua</i>.\nScrivi <b>-</b> per saltare.', mid, 'Nota, oppure -'); }
   askStock(chatId, mid) {
     return this.ask(chatId, 'Quante compresse (o unità) hai adesso? Le scalo a ogni dose e ti avviso quando stanno per finire.\nScrivi solo il numero (es. <code>50</code>), oppure <b>salta</b>.', mid, 'Es. 28');
   }
@@ -1340,7 +1353,7 @@ export class Store {
   medText(c, m) {
     const today = romeParts().date, next = (m.plan || []).filter(p => p.from > today).sort((a, b) => a.from < b.from ? -1 : 1)[0];
     const extra = (next ? `\n🔁 dal ${fmtDate(next.from)}: ${next.times.join(', ')}` : '') + (m.end ? `\n🏁 ${this.ended(m, today) ? 'terminata il' : 'fino al'} ${fmtDate(m.end)}` : '');
-    return `<b>${esc(m.name)}</b>${m.dose ? ' ' + esc(m.dose) : ''}${m.paused ? ' ⏸ <i>in pausa</i>' : ''}${this.multi(c) ? '\n👤 ' + esc(this.person(c, m.person)) : ''}\n🕐 ${m.times.join(', ')} · ${daysText(m.days)}${m.stock != null ? `\n📦 ${un(m, m.stock)}` : ''}\n${RX_LABEL[rxOf(m)]}` + extra;
+    return `<b>${esc(m.name)}</b>${m.dose ? ' ' + esc(m.dose) : ''}${m.paused ? ' ⏸ <i>in pausa</i>' : ''}${this.multi(c) ? '\n👤 ' + esc(this.person(c, m.person)) : ''}\n🕐 ${m.times.join(', ')} · ${daysText(m.days)}${m.stock != null ? `\n📦 ${un(m, m.stock)}` : ''}\n${RX_LABEL[rxOf(m)]}${m.notes ? '\n📝 ' + esc(m.notes) : ''}` + extra;
   }
   // cron = solo terapia cronica (senza data di fine, niente al bisogno)
   // testo semplice (per la pagina di stampa) con i farmaci di oggi in ordine di orario
@@ -1357,7 +1370,7 @@ export class Store {
       const slots = {};
       for (const m of active.filter(x => x.person === pid)) {
         const times = this.timesOn(m, n.date).length ? this.timesOn(m, n.date) : m.times;
-        const extra = [m.days.length && m.days.length < 7 && !m.end ? 'solo ' + daysText(m.days) : '', m.end ? 'fino al ' + short(m.end) : '', (m.start && m.start > n.date) ? 'dal ' + short(m.start) : ''].filter(Boolean).join(', ');
+        const extra = [m.days.length && m.days.length < 7 && !m.end ? 'solo ' + daysText(m.days) : '', m.end ? 'fino al ' + short(m.end) : '', (m.start && m.start > n.date) ? 'dal ' + short(m.start) : '', m.notes || ''].filter(Boolean).join(', ');
         for (const hm of times) (slots[hm] = slots[hm] || []).push(`*${m.name}*${m.dose ? ' ' + m.dose : ''}${extra ? ' (' + extra + ')' : ''}`);
       }
       t += '\n';
@@ -1442,7 +1455,7 @@ export class Store {
         if (m.notes) t += ` (${esc(m.notes)})`;
       }
       const occ = (c.occ || []).filter(o => o.person === pid);
-      if (occ.length) t += `\n\n<b>Al bisogno</b>` + occ.map(o => `\n• <b>${esc(o.name)}</b>${o.dose ? ' ' + esc(o.dose) : ''}${o.unit ? ' (' + unitOf(o)[1] + ')' : ''}`).join('');
+      if (occ.length) t += `\n\n<b>Al bisogno</b>` + occ.map(o => `\n• <b>${esc(o.name)}</b>${o.dose ? ' ' + esc(o.dose) : ''}${o.unit ? ' (' + unitOf(o)[1] + ')' : ''}${o.notes ? ' — ' + esc(o.notes) : ''}`).join('');
       t += '\n';
     }
     return t;
@@ -1684,7 +1697,7 @@ export class Store {
     return {
       text: this.medText(c, m), kb: {
         inline_keyboard: [
-          [{ text: '✏️ Nome', callback_data: 'ME|' + m.id + '|name' }, { text: '✏️ Dose', callback_data: 'ME|' + m.id + '|dose' }, { text: '🕐 Orari', callback_data: 'ME|' + m.id + '|times' }],
+          [{ text: '✏️ Nome', callback_data: 'ME|' + m.id + '|name' }, { text: '✏️ Dose', callback_data: 'ME|' + m.id + '|dose' }, { text: '🕐 Orari', callback_data: 'ME|' + m.id + '|times' }, { text: '📝 Note', callback_data: 'ME|' + m.id + '|notes' }],
           [...(c.persons.length > 1 ? [{ text: '👤 Chi', callback_data: 'MW|' + m.id }] : []), { text: m.paused ? '▶️ Riprendi' : '⏸ Pausa', callback_data: 'MP|' + m.id }, { text: '📦 Scorte', callback_data: 'SK|' + m.id }],
           [{ text: '📅 Giorni', callback_data: 'MG|' + m.id }, { text: '📆 Programma', callback_data: 'MT|' + m.id }, this.ended(m, romeParts().date) ? { text: '♻️ Riattiva', callback_data: 'MR|' + m.id } : { text: '🗂 Archivia', callback_data: 'MA|' + m.id }],
           [{ text: RX_LABEL[rxOf(m)] + ' ↻', callback_data: 'MRX|' + m.id }],
@@ -2255,8 +2268,13 @@ export class Store {
         { inline_keyboard: [...occ.map(o => [{ text: `💊 ${o.name}${o.dose ? ' ' + o.dose : ''} · ${unitOf(o)[1]}`.slice(0, 60), callback_data: 'OE|' + o.id }]), [{ text: '⬅️ Elenco', callback_data: 'ML' }]] });
       return ans(k === 'OX' ? 'Tolto' : '');
     }
-    if (['OE', 'OU', 'OUS', 'ORX'].includes(k)) {   // scheda di un farmaco al bisogno
+    if (['OE', 'OU', 'OUS', 'ORX', 'ON'].includes(k)) {   // scheda di un farmaco al bisogno
       const o = (c.occ || []).find(x => x.id === r[0]); if (!o) return ans('Farmaco non trovato');
+      if (k === 'ON') {
+        c.flows[uid] = { step: 'occ_note', d: { id: o.id } }; await this.saveChat(dataId, c);
+        await this.ask(chatId, `📝 Nota per <b>${esc(o.name)}</b>?${o.notes ? ` (ora: ${esc(o.notes)})` : ''}\nAd esempio <i>massimo 3 al giorno</i>. Scrivi <b>-</b> per toglierla.`, null, 'Nota');
+        return ans();
+      }
       if (k === 'OU') {
         const b = Object.entries(UNITS).map(([u, [, pl]]) => ({ text: `${(o.unit || 'cp') === u ? '✅ ' : ''}${pl}`, callback_data: `OUS|${o.id}|${u}` }));
         const rows = []; for (let i = 0; i < b.length; i += 3) rows.push(b.slice(i, i + 3));
@@ -2265,8 +2283,9 @@ export class Store {
       }
       if (k === 'OUS') { if (r[1] === 'cp') delete o.unit; else if (UNITS[r[1]]) o.unit = r[1]; await this.saveChat(dataId, c); }
       if (k === 'ORX') { const nx = { ssn: 'bianca', bianca: 'banco', banco: 'ssn' }[rxOf(o)]; if (nx === 'ssn') delete o.rx; else o.rx = nx; await this.saveChat(dataId, c); }
-      await this.edit(chatId, mid, `💊 <b>${esc(o.name)}</b>${o.dose ? ' ' + esc(o.dose) : ''} · al bisogno\n🔢 ${unitOf(o)[1]}\n${RX_LABEL[rxOf(o)]}`, { inline_keyboard: [
+      await this.edit(chatId, mid, `💊 <b>${esc(o.name)}</b>${o.dose ? ' ' + esc(o.dose) : ''} · al bisogno\n🔢 ${unitOf(o)[1]}\n${RX_LABEL[rxOf(o)]}${o.notes ? '\n📝 ' + esc(o.notes) : ''}`, { inline_keyboard: [
         [{ text: `🔢 Forma: ${unitOf(o)[1]}`, callback_data: 'OU|' + o.id }, { text: RX_LABEL[rxOf(o)] + ' ↻', callback_data: 'ORX|' + o.id }],
+        [{ text: '📝 Note', callback_data: 'ON|' + o.id }],
         [{ text: '🗑 Togli', callback_data: 'OX|' + o.id }, { text: '⬅️ Al bisogno', callback_data: 'OL' }]] });
       return ans(k === 'OUS' ? 'Forma: ' + unitOf(o)[1] : k === 'ORX' ? RX_LABEL[rxOf(o)] : '');
     }
@@ -2373,12 +2392,13 @@ export class Store {
     }
     if (k === 'ME') {
       const field = r[1];
-      if (!['name', 'dose', 'times'].includes(field)) return ans();
+      if (!['name', 'dose', 'times', 'notes'].includes(field)) return ans();
       c.flows[uid] = { step: 'edit', d: { med: m.id, field } }; await this.saveChat(dataId, c);
       const q = {
         name: [`Nuovo nome per <b>${esc(m.name)}</b>?`, 'Nome del farmaco'],
         dose: [`Nuovo dosaggio per <b>${esc(m.name)}</b>?${m.dose ? ` (ora: ${esc(m.dose)})` : ''}\nScrivi <b>salta</b> per toglierlo.`, 'Es. 400 mg'],
-        times: [`Nuovi orari per <b>${esc(m.name)}</b>? (ora: ${m.times.join(', ')})\nScrivili tutti, ad esempio <code>8 13 18 23</code>.`, 'Es. 8 20']
+        times: [`Nuovi orari per <b>${esc(m.name)}</b>? (ora: ${m.times.join(', ')})\nScrivili tutti, ad esempio <code>8 13 18 23</code>.`, 'Es. 8 20'],
+        notes: [`📝 Nota per <b>${esc(m.name)}</b>?${m.notes ? ` (ora: ${esc(m.notes)})` : ''}\nAd esempio <i>a stomaco pieno</i>. Scrivi <b>-</b> per toglierla.`, 'Nota']
       }[field];
       await this.ask(chatId, q[0], null, q[1]);
       return ans();
