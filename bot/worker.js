@@ -262,9 +262,9 @@ const PRINT_PAGE = String.raw`<!doctype html><html lang="it"><head><meta charset
 <meta name="robots" content="noindex"><style>
 body{font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#111;max-width:720px;margin:24px auto;padding:0 18px}
 h1{font-size:22px;margin:0 0 2px}.sub{color:#555;margin:0 0 18px}ul{padding-left:20px;margin:6px 0 14px}li{margin:4px 0}
-h2{font-size:17px;margin:18px 0 4px}.bar{position:sticky;top:0;background:#fff;padding:10px 0;margin-bottom:10px;border-bottom:1px solid #ddd}
+h2{font-size:17px;margin:18px 0 4px}table{border-collapse:collapse;width:100%;margin:6px 0 14px}td{border-top:1px solid #ddd;padding:5px 8px;vertical-align:top}td.h{font-weight:700;white-space:nowrap;width:1%}.bar{position:sticky;top:0;background:#fff;padding:10px 0;margin-bottom:10px;border-bottom:1px solid #ddd}
 button{font:600 17px system-ui;padding:12px 18px;border-radius:10px;border:0;background:#1f6f43;color:#fff}.hint{color:#666;font-size:13px;margin-top:6px}
-@media print{.bar{display:none}body{margin:0}}</style></head><body>
+@media print{.bar{display:none}body{margin:0;font-size:12.5px;line-height:1.35}h1{font-size:17px}td{padding:3px 6px}li{margin:1px 0}}</style></head><body>
 <div class="bar"><button onclick="window.print()">🖨 Stampa o salva in PDF</button><div class="hint">Se non si apre la stampa: menu ⋮ → «Apri in Chrome», poi di nuovo il pulsante.</div></div>
 <div id="out"></div>
 <script>
@@ -273,15 +273,17 @@ var h=location.hash.slice(1).replace(/-/g,'+').replace(/_/g,'/');while(h.length%
 var t=decodeURIComponent(escape(atob(h)));
 var e=function(x){return x.replace(/[&<>]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;'}[c]})};
 var b=function(x){return e(x).replace(/\*(.+?)\*/g,'<b>$1</b>')};
-var L=t.split('\n'),o='',inl=false,first=true;
+var L=t.split('\n'),o='',inl=false,intb=false,first=true;
 for(var i=0;i<L.length;i++){var l=L[i].trim();
+ if(l.charAt(0)==='@'){if(inl){o+='</ul>';inl=false}if(!intb){o+='<table>';intb=true}var p=l.slice(1).split('|');o+='<tr><td class="h">'+e(p[0])+'</td><td>'+p.slice(1).map(b).join('<br>')+'</td></tr>';continue}
+ if(intb){o+='</table>';intb=false}
  if(!l){if(inl){o+='</ul>';inl=false}continue}
  if(l.indexOf('• ')===0){if(!inl){o+='<ul>';inl=true}o+='<li>'+b(l.slice(2))+'</li>';continue}
  if(inl){o+='</ul>';inl=false}
  if(first){o+='<h1>'+e(l.replace(/^\W+\s*/,'').replace(/\*/g,''))+'</h1>';first=false;continue}
  if(/^Aggiornat/.test(l)){o+='<p class="sub">'+e(l)+'</p>';continue}
  o+='<h2>'+e(l.replace(/\*/g,''))+'</h2>'}
-if(inl)o+='</ul>';document.getElementById('out').innerHTML=o;document.title=(L[0]||'Terapia').replace(/^\W+\s*/,'').replace(/\*/g,'');
+if(inl)o+='</ul>';if(intb)o+='</table>';document.getElementById('out').innerHTML=o;document.title=(L[0]||'Terapia').replace(/^\W+\s*/,'').replace(/\*/g,'');
 }catch(err){document.getElementById('out').textContent='Pagina non valida: riapri il pulsante Stampa dal bot.'}})();
 </script></body></html>`;
 // nel menu a tendina di Telegram solo /menu: gli altri comandi sono pulsanti (e funzionano anche scritti a mano)
@@ -1342,25 +1344,24 @@ export class Store {
   }
   // cron = solo terapia cronica (senza data di fine, niente al bisogno)
   // testo semplice (per la pagina di stampa) con i farmaci di oggi in ordine di orario
-  scheduleText(c) {
+  scheduleText(c, cron) {
     const n = romeParts();
-    const active = c.meds.filter(m => !m.paused && !this.ended(m, n.date));
+    const active = c.meds.filter(m => !m.paused && !this.ended(m, n.date) && (!cron || !m.end));
     const [y, mo, d] = n.date.split('-').map(Number);
     const dateLong = new Date(Date.UTC(y, mo - 1, d)).toLocaleDateString('it-IT', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
     const persons = [...new Set(active.map(m => m.person))];
     const short = dt => { const [, mm, dd] = dt.split('-').map(Number); return `${dd}/${mm}`; };
-    let t = `🕐 *Orari dei farmaci*${persons.length === 1 ? ' — ' + this.person(c, persons[0]) : ''}\nAggiornata al ${dateLong}\n`;
+    let t = `🕐 *Orari dei farmaci${cron ? ' — terapia cronica' : ''}*${persons.length === 1 ? ' — ' + this.person(c, persons[0]) : ''}\nAggiornata al ${dateLong}\n`;
     for (const pid of persons) {
       if (persons.length > 1) t += `\n*${this.person(c, pid)}*\n`;
       const slots = {};
       for (const m of active.filter(x => x.person === pid)) {
         const times = this.timesOn(m, n.date).length ? this.timesOn(m, n.date) : m.times;
-        const extra = [m.days.length && m.days.length < 7 ? 'solo ' + daysText(m.days) : '', m.end ? 'fino al ' + short(m.end) : '', (m.start && m.start > n.date) ? 'dal ' + short(m.start) : ''].filter(Boolean).join(', ');
-        for (const hm of times) (slots[hm] = slots[hm] || []).push(`• *${m.name}*${m.dose ? ' ' + m.dose : ''}${extra ? ' (' + extra + ')' : ''}`);
+        const extra = [m.days.length && m.days.length < 7 && !m.end ? 'solo ' + daysText(m.days) : '', m.end ? 'fino al ' + short(m.end) : '', (m.start && m.start > n.date) ? 'dal ' + short(m.start) : ''].filter(Boolean).join(', ');
+        for (const hm of times) (slots[hm] = slots[hm] || []).push(`*${m.name}*${m.dose ? ' ' + m.dose : ''}${extra ? ' (' + extra + ')' : ''}`);
       }
-      for (const hm of Object.keys(slots).sort()) t += `\n${hm}\n` + slots[hm].join('\n') + '\n';
-      const occ = (c.occ || []).filter(o => o.person === pid);
-      if (occ.length) t += `\nAl bisogno\n` + occ.map(o => `• *${o.name}*${o.dose ? ' ' + o.dose : ''}`).join('\n') + '\n';
+      t += '\n';
+      for (const hm of Object.keys(slots).sort()) t += `@${hm}|${slots[hm].join('|')}\n`;   // una riga per orario: nella pagina diventa una tabella
     }
     return t;
   }
@@ -1378,7 +1379,7 @@ export class Store {
     const pu = c.meds.length ? this.printUrl(plain) : null;
     if (pu) row.push({ text: '🖨 Stampa', url: pu });
     const kb = [row, [cron ? { text: '🩺 Tutta la terapia', callback_data: 'TC|0' } : { text: '♾️ Solo cronica', callback_data: 'TC|1' }]];
-    const su = main && c.meds.length ? this.printUrl(this.scheduleText(c)) : null;   // solo nel gruppo principale
+    const su = main && c.meds.length ? this.printUrl(this.scheduleText(c, cron)) : null;   // solo nel gruppo principale
     if (su) kb[1].push({ text: '🕐 Stampa con orari', url: su });
     return { text, kb: { inline_keyboard: kb }, long: c.meds.length && url.length > 4000 };
   }
