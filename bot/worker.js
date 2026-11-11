@@ -1287,10 +1287,10 @@ export class Store {
       case 'psince': {
         const m = c.meds.find(x => x.id === d.med); const today = romeParts().date;
         if (!m) { delete c.flows[uid]; await save(); return this.send(chatId, 'Il farmaco non esiste più.'); }
-        let f = parseDate(text, today);
-        if (f && f > today && !/\d{4}/.test(text)) { const y = +f.slice(0, 4) - 1; f = `${y}${f.slice(4)}`; }
-        if (!f || f > today) return this.ask(chatId, 'Scrivi la data di inizio, ad esempio <code>3/11</code>.', mid, 'Es. 3/11');
-        m.since = f;
+        let f = /^\s*oggi\s*$/i.test(text) ? today : parseDate(text, today);
+        if (f && f > addDays(today, 300).date && !/\d{4}/.test(text)) { const y = +f.slice(0, 4) - 1; f = `${y}${f.slice(4)}`; }
+        if (!f || f < addDays(today, -400).date) return this.ask(chatId, 'Scrivi la data di inizio, ad esempio <code>3/11</code> (va bene anche un giorno futuro).', mid, 'Es. 3/11');
+        m.since = f; m.start = f;   // start = da quando arrivano i promemoria (prima non veniva aggiornato)
         delete c.flows[uid]; await save();
         const v = this.planView(c, m);
         return this.send(chatId, '✅ Fatto.\n\n' + v.text, v.kb);
